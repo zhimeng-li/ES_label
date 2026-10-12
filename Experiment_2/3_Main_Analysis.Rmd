@@ -1,0 +1,1800 @@
+---
+title: "3_Main_Analysis"
+author: "Zhimeng Li"
+date: "2023-11-07"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#Load packages
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+list.of.packages = c("base","spearmanCI","tidyr", "readr","dplyr", "ggplot2","psych" , "ggpubr","stats","rstatix", "pwr","Hmisc","ggfortify","apaTables","kableExtra", "Routliers","viridis","stringr","data.table","interactions","effectsize","flextable","officer","tidyverse","car","patchwork","ggsignif")
+
+
+new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
+if(length(new.packages) > 0) {install.packages(new.packages)}
+lapply(list.of.packages, require, character.only=T)
+```
+
+
+#pooled data CEs
+
+##load data
+```{r}
+full.sdt=(read.csv("Processed Data/Level2_output/full_SDT_outlierremoved.csv"))[,-1]
+full.sdt <- full.sdt %>%
+  dplyr::select("Participant","dprime","c","condition")
+names(full.sdt)[1]="subjectID"
+
+full.cea=(read.csv("Processed Data/Level2_output/full_CEA_outlierremoved.csv"))[,-1]
+
+full.acc=(read.csv("Processed Data/Level2_output/full_acc_outremoved.csv"))[,-1]
+names(full.acc)[1]="subjectID"
+cond=full.cea %>% dplyr::select(subjectID,condition)
+full.acc=left_join(full.acc,cond)
+
+full.optdev=(read.csv("Processed Data/Level2_output/full_optdev_outremoved.csv"))[,-1]
+
+all.mlu=(read.csv("Processed Data/Level2_output/mlu_outremoved.csv"))[,-1]
+all.steu=(read.csv("Processed Data/Level2_output/steu_outremoved.csv"))[,-1]
+all.steu=all.steu %>% dplyr::select(subjectID,condition,STEU_score,STEU_sub_score,STEU_untrained)
+all.emo.verb=(read.csv("Processed Data/Level2_output/emo_verb_outremoved.csv"))[,-1]
+
+
+
+```
+
+```{r}
+all=full_join(full.cea,full.acc,by=c("subjectID","condition"))
+all=full_join(all,full.sdt,by=c("subjectID","condition"))
+all=full_join(all,full.optdev,by=c("subjectID","condition"))
+all=full_join(all,all.steu,by=c("subjectID","condition"))
+all=full_join(all,all.emo.verb,by=c("subjectID","condition"))
+all=full_join(all,all.mlu,by=c("subjectID","condition"))
+
+```
+
+```{r}
+# outlier summary
+full.sub=all %>% dplyr::select(subjectID, condition,CEA_ave,dprime,c,ave.c.devi,accuracy, SegNum_ave,MLU_ave)
+with_NA <- full.sub[!complete.cases(full.sub), ] #8 participant
+num_NA <- sum(is.na(with_NA)) #12 datapoints
+
+check=with_NA %>% 
+  group_by(condition) %>%
+  dplyr::summarize(total=n())
+
+outlier_summary <- with_NA %>%
+  group_by(condition) %>%
+  dplyr::summarise(across(-c(subjectID), ~ sum(is.na(.x)), .names = "{.col}")) %>%
+  ungroup()
+
+full.sub.1=all %>% dplyr::select(subjectID, condition,STEU_score,STEU_sub_score,STEU_untrained,total_unique_word,total_word)
+with_NA <- full.sub.1[!complete.cases(full.sub.1), ] 
+num_NA <- sum(is.na(with_NA)) 
+
+check=with_NA %>% 
+  group_by(condition) %>%
+  dplyr::summarize(total=n())
+
+
+
+```
+
+# Simple descriptive variables (video-level)
+## MLU and segmentation number descriptives
+
+```{r,echo=FALSE}
+desc_SegNum <- describeBy(all.mlu$SegNum_ave, group = all.mlu$condition, mat = TRUE)
+rownames(desc_SegNum) <- desc_SegNum$group1
+desc_SegNum <- desc_SegNum[,-1]  # drop the group1 column since it's now rownames
+desc_SegNum
+
+desc_SegNum <- data.frame(desc_SegNum)
+desc_SegNum$metric="SegNum"
+```
+
+```{r,echo=FALSE}
+desc_mlu <- describeBy(all.mlu$MLU_ave, group = all.mlu$condition, mat = TRUE)
+rownames(desc_mlu) <- desc_mlu$group1
+desc_mlu <- desc_mlu[,-1]  # drop the group1 column since it's now rownames
+desc_mlu
+
+desc_mlu <- data.frame(desc_mlu)
+desc_mlu$metric="MLU"
+```
+
+
+## CEA descriptives
+
+```{r,echo=FALSE}
+desc_CEA <- describeBy(full.cea$CEA_ave, group = full.cea$condition, mat = TRUE)
+rownames(desc_CEA) <- desc_CEA$group1
+desc_CEA <- desc_CEA[,-1]  # drop the group1 column since it's now rownames
+desc_CEA
+
+desc_CEA <- data.frame(desc_CEA)
+desc_CEA$metric="CEA"
+```
+
+## d' descriptives
+
+```{r,echo=FALSE}
+desc_dprime <- describeBy(full.sdt$dprime, group = full.sdt$condition, mat = TRUE)
+rownames(desc_dprime) <- desc_dprime$group1
+desc_dprime <- desc_dprime[,-1]  # drop the group1 column since it's now rownames
+desc_dprime
+
+desc_dprime <- data.frame(desc_dprime)
+desc_dprime$metric="dprime"
+```
+
+## c descriptives
+
+```{r,echo=FALSE}
+desc_c <- describeBy(full.sdt$c, group = full.sdt$condition, mat = TRUE)
+rownames(desc_c) <- desc_c$group1
+desc_c <- desc_c[,-1]  # drop the group1 column since it's now rownames
+desc_c
+
+desc_c <- data.frame(desc_c)
+desc_c$metric="c"
+```
+
+## accuracy descriptives
+
+```{r,echo=FALSE}
+desc_acc <- describeBy(full.acc$accuracy, group = full.acc$condition, mat = TRUE)
+rownames(desc_acc) <- desc_acc$group1
+desc_acc <- desc_acc[,-1]  # drop the group1 column since it's now rownames
+desc_acc
+
+desc_acc <- data.frame(desc_acc)
+
+desc_acc <- data.frame(desc_acc)
+desc_acc$metric="Accuracy"
+
+```
+
+##deviation descriptives
+
+```{r,echo=FALSE}
+desc_optdev <- describeBy(full.optdev$ave.c.devi, group = full.acc$condition, mat = TRUE)
+rownames(desc_optdev) <- desc_optdev$group1
+desc_optdev <- desc_optdev[,-1]  # drop the group1 column since it's now rownames
+desc_optdev
+
+desc_optdev <- data.frame(desc_optdev)
+
+desc_optdev <- data.frame(desc_optdev)
+desc_optdev$metric="optimal_c_deviation"
+```
+
+```{r}
+desc <- rbind(desc_SegNum,desc_mlu,desc_CEA,desc_dprime,desc_c,desc_acc,desc_optdev)
+desc <- dplyr::rename(desc,condition=group1)
+
+```
+
+##descipritve - visual
+```{r}
+df_fmt <- desc %>%
+  mutate(
+    value = sprintf("%.2f (%.2f)", mean, sd)
+  ) %>%
+  select(condition, metric, value)
+```
+
+```{r}
+table_df <- df_fmt %>%
+  pivot_wider(
+    names_from = condition,
+    values_from = value
+  ) %>%
+  arrange(metric)
+
+table_df <- table_df %>% relocate(3, .after = last_col())
+table_df <- table_df %>% relocate(2, .after = last_col())
+
+table_df
+```
+
+
+## STEU total descriptive
+```{r,echo=FALSE}
+desc_steu_total <- describeBy(all$STEU_score, group = all$condition, mat = TRUE)
+rownames(desc_steu_total) <- desc_steu_total$group1
+desc_steu_total <- desc_steu_total[,-1]  # drop the group1 column since it's now rownames
+desc_steu_total
+```
+
+## STEU trained descriptive
+```{r,echo=FALSE}
+desc_steu_trained <- describeBy(all$STEU_sub_score, group = all$condition, mat = TRUE)
+rownames(desc_steu_trained) <- desc_steu_trained$group1
+desc_steu_trained <- desc_steu_trained[,-1]  # drop the group1 column since it's now rownames
+desc_steu_trained
+
+sub=all %>% filter(condition=="NoLabel")
+hist(sub$STEU_sub_score)
+median(sub$STEU_sub_score)
+
+sub=all %>% filter(condition=="WithLabel")
+hist(sub$STEU_sub_score)
+median(sub$STEU_sub_score)
+```
+
+## STEU untrained descriptive
+```{r,echo=FALSE}
+desc_steu_untrained <- describeBy(all$STEU_untrained, group = all$condition, mat = TRUE)
+rownames(desc_steu_untrained) <- desc_steu_untrained$group1
+desc_steu_untrained <- desc_steu_untrained[,-1]  # drop the group1 column since it's now rownames
+desc_steu_untrained
+```
+
+## emo verb descriptive (total unique word)
+```{r,echo=FALSE}
+desc_steu_emoverb <- describeBy(all$total_unique_word, group = all$condition, mat = TRUE)
+rownames(desc_steu_emoverb) <- desc_steu_emoverb$group1
+desc_steu_emoverb <- desc_steu_emoverb[,-1]  # drop the group1 column since it's now rownames
+desc_steu_emoverb
+```
+
+## emo verb descriptive (total word)
+```{r,echo=FALSE}
+desc_steu_emoverb <- describeBy(all$total_word, group = all$condition, mat = TRUE)
+rownames(desc_steu_emoverb) <- desc_steu_emoverb$group1
+desc_steu_emoverb <- desc_steu_emoverb[,-1]  # drop the group1 column since it's now rownames
+desc_steu_emoverb
+```
+
+
+
+# ANOVA - group difference in emo seg
+
+```{r,echo=FALSE}
+FULL=all
+
+FULL$condition <- factor(FULL$condition, levels = c("NoLabel", "WithLabel", "Counting"))
+FULL$color_order <- factor(FULL$condition, levels = c("NoLabel", "Counting", "WithLabel"))
+
+```
+
+```{r,echo=FALSE}
+shapiro.test(FULL$dprime)#normal
+```
+
+
+```{r,echo=FALSE}
+#test assumptions
+leveneTest(dprime~condition,data=FULL) #no equal variance for dprime
+leveneTest(c~condition,data=FULL) #equal variance for c
+```
+
+## mlu
+main effect of condition in mlu
+```{r,echo=FALSE}
+fit6=aov(MLU_ave~condition,data=FULL)
+summary(fit6) #
+```
+
+### pairwise comparison
+
+```{r}
+tukey_result <- TukeyHSD(fit6)
+print(tukey_result) 
+```
+
+### effect size
+```{r}
+eta_squared(fit6) 
+```
+
+
+## segmentation number
+```{r,echo=FALSE}
+fit6=aov(SegNum_ave~condition,data=FULL)
+summary(fit6) #
+```
+
+### pairwise comparison
+
+```{r}
+tukey_result <- TukeyHSD(fit6)
+print(tukey_result) 
+```
+
+### effect size
+```{r}
+eta_squared(fit6) 
+```
+
+## CEA
+main effect of condition in CEA
+```{r,echo=FALSE}
+fit3=aov(CEA_ave~condition,data=FULL)
+summary(fit3) #significant
+```
+
+### pairwise
+counting<nolabel, labeling<nolabel, labeling < counting
+```{r}
+tukey_result <- TukeyHSD(fit3)
+print(tukey_result) 
+```
+
+### effect size
+```{r}
+eta_squared(fit3) 
+```
+
+
+## accuracy
+main effect of condition in accuracy
+```{r,echo=FALSE}
+
+fit4=aov(accuracy~condition,data=FULL)
+summary(fit4) 
+```
+
+### pairwise comparison
+labeling lower than nolabel and counting, counting lower than no label
+```{r}
+tukey_result <- TukeyHSD(fit4)
+print(tukey_result)
+```
+
+### effect size
+```{r}
+eta_squared(fit4) 
+```
+
+
+## dprime
+main effect of condition in dprime
+```{r,echo=FALSE}
+fit1=aov(dprime~condition,data=FULL)
+summary(fit1) #
+```
+
+### pairwise comparison
+no labeling no difference in dprime with counting, both higher than with-label
+```{r}
+#pairwise:
+options(es.use_symbols = TRUE) 
+tukey_result <- TukeyHSD(fit1)
+print(tukey_result) #
+```
+
+### effect size
+```{r}
+eta_squared(fit1)
+```
+
+
+## c
+main effect of condition in c
+```{r,echo=FALSE}
+
+fit2=aov(c~condition,data=FULL)
+summary(fit2) #
+```
+
+### pairwise
+label > nolabel, counting > no label; counting~labeling
+```{r}
+tukey_result <- TukeyHSD(fit2)
+print(tukey_result)
+```
+
+### effect size
+```{r}
+eta_squared(fit2)
+```
+
+
+##deviation from optimal c
+main effect of condition in deviation from optimal c
+```{r,echo=FALSE}
+
+fit5=aov(ave.c.devi~condition,data=all)
+summary(fit5) #
+```
+
+### pairwise comparison
+labeling group deviate less than nolabeling group and marginally lower than the counting group; no difference between counting and nolabel group
+```{r}
+tukey_result <- TukeyHSD(fit5)
+print(tukey_result)
+```
+
+### effect size
+```{r}
+eta_squared(fit5) #eta2 = 0.04
+```
+
+
+
+## STEU total
+group difference in STEU
+```{r,echo=FALSE}
+fit1=aov(STEU_score~condition,data=all)
+summary(fit1) #
+```
+
+### pairwise comparison
+labeling group lower than no label, no other group difference.
+```{r}
+tukey_result <- TukeyHSD(fit1)
+print(tukey_result) 
+```
+
+
+### effect size
+```{r}
+eta_squared(fit1) 
+
+```
+
+
+## STEU trained
+
+no difference
+```{r,echo=FALSE}
+fit2=aov(STEU_sub_score~condition,data=all)
+summary(fit2) #no difference
+```
+
+
+
+## STEU untrained
+no difference
+```{r,echo=FALSE}
+fit3=aov(STEU_untrained~condition,data=all)
+summary(fit3) 
+```
+
+
+##semantic fluency
+
+no difference
+```{r,echo=FALSE}
+fit2=aov(total_unique_word~condition,data=all)
+summary(fit2) #no difference
+```
+
+no difference
+```{r,echo=FALSE}
+fit3=aov(STEU_untrained~condition,data=all)
+summary(fit3) 
+```
+
+#visual
+```{r}
+
+make_boxplot <- function(
+    data,
+    variable,
+    title,
+    comparisons = NULL,
+    annotations = NULL
+) {
+  
+  p <- data %>%
+    ggplot(
+      aes(
+        x = condition,
+        y = .data[[variable]]
+      )
+    ) +
+    geom_boxplot(aes(fill = color_order)) +
+    scale_fill_viridis(discrete = TRUE, alpha = 0.6) +
+    geom_jitter(
+      color = "black",
+      size = 0.4,
+      alpha = 0.9
+    ) +
+    scale_y_continuous(
+      expand = expansion(mult = c(0.05, 0.25))
+    ) +
+    coord_cartesian(clip = "off") +
+    theme_bw(base_size = 16) +
+    theme(
+      legend.position = "none",
+      plot.title = element_text(size = 11),
+      panel.border = element_blank(),
+      plot.margin = margin(t = 15, r = 5, b = 5, l = 5)
+    ) +
+    ggtitle(title) +
+    xlab("")
+  
+  if (!is.null(comparisons)) {
+    p <- p +
+      geom_signif(
+        comparisons = comparisons,
+        annotations = annotations,
+        map_signif_level = FALSE,
+        step_increase = 0.10,
+        margin_top = 0.05,
+        tip_length = 0.01,
+        textsize = 5
+      )
+  }
+  
+  return(p)
+}
+```
+
+
+```{r}
+
+# Accuracy
+p_accuracy <- make_boxplot(
+  FULL, "accuracy", "Accuracy by condition",
+  comparisons = list(
+    c("NoLabel", "WithLabel"),
+    c("WithLabel", "Counting"),
+    c("NoLabel", "Counting")
+  ),
+  annotations = c("*", "***", "*")
+)
+
+
+# Sensitivity
+p_sensitivity <- make_boxplot(
+  FULL, "dprime", "Sensitivity by condition",
+  comparisons = list(
+    c("NoLabel", "WithLabel"),
+    c("WithLabel", "Counting")
+  ),
+  annotations = c("**", "***")
+)
+
+
+# response bias
+p_rb <- make_boxplot(
+  FULL, "c", "Response bias by condition",
+  comparisons = list(
+    c("NoLabel", "WithLabel"),
+    c("NoLabel", "Counting")
+  ),
+  annotations = c("***", "***")
+)
+
+
+# Consensus Event Agreement
+p_CEA <- make_boxplot(
+  FULL, "CEA_ave", "Consensus Event Agreement by condition",
+  comparisons = list(
+    c("NoLabel", "WithLabel"),
+    c("WithLabel", "Counting"),
+    c("NoLabel", "Counting")
+  ),
+  annotations = c("***", "***", "**")
+)
+
+
+# Segmentation number
+p_segnum <- make_boxplot(
+  FULL, "SegNum_ave", "Segmentation Number by condition",
+  comparisons = list(
+    c("NoLabel", "WithLabel"),
+    c("NoLabel", "Counting")
+  ),
+  annotations = c("***", "***")
+)
+
+
+# Mean length unit
+p_MLU <- make_boxplot(
+  FULL, "MLU_ave", "Mean Length Unit by condition",
+  comparisons = list(
+    c("NoLabel", "WithLabel"),
+    c("NoLabel", "Counting")
+  ),
+  annotations = c("***", "***")
+)
+
+
+# STEU total score
+p_STEU <- make_boxplot(
+  FULL, "STEU_score", "STEU Score by condition",
+  comparisons = list(
+    c("NoLabel", "WithLabel")
+  ),
+  annotations = "**"
+)
+```
+
+```{r}
+p_STEU_sub <- make_boxplot(
+  FULL,
+  variable = "STEU_sub_score",
+  title = "STEU Subscore by condition"
+)
+
+p_STEU_untrained <- make_boxplot(
+  FULL,
+  variable = "STEU_untrained",
+  title = "STEU Untrained Score by condition"
+)
+
+p_total_word <- make_boxplot(
+  FULL,
+  variable = "total_word",
+  title = "Total Words by condition"
+)
+
+p_unique_word <- make_boxplot(
+  FULL,
+  variable = "total_unique_word",
+  title = "Total Unique Words by condition"
+)
+```
+
+```{r}
+# 1. sdt
+p_performance <- p_sensitivity + p_rb
+
+ggsave(
+  filename = "visual/sensitivity_rb.pdf",
+  plot = p_performance,
+  width = 10,
+  height = 5
+)
+
+
+# 2. acc + Consensus Event Agreement
+
+p_accCEA <- p_accuracy + p_CEA
+ggsave(
+  filename = "visual/acc_CEA_boxplot.pdf",
+  plot = p_accCEA,
+  width = 10,
+  height = 5
+)
+
+
+# 3. Segmentation number and mean length unit
+p_segmentation <- p_segnum + p_MLU
+
+ggsave(
+  filename = "visual/segnum_MLU.pdf",
+  plot = p_segmentation,
+  width = 10,
+  height = 5
+)
+
+
+# 4. STEU measures
+p_STEU_group <- p_STEU + p_STEU_sub + p_STEU_untrained
+
+ggsave(
+  filename = "visual/STEU_measures.pdf",
+  plot = p_STEU_group,
+  width = 15,
+  height = 5
+)
+
+
+# 5. Word-use measures
+p_word_group <- p_total_word + p_unique_word
+
+ggsave(
+  filename = "visual/word_measures.pdf",
+  plot = p_word_group,
+  width = 10,
+  height = 5
+)
+```
+
+
+# semantic - emoseg metric relationship across whole sample
+
+##STEU/word-emo seg across conditions
+###STEU
+```{r}
+model=lm(CEA_ave~STEU_score,data=all)
+summary(model)
+```
+
+```{r}
+model=lm(CEA_ave~STEU_sub_score,data=all)
+summary(model)
+```
+
+```{r}
+model=lm(CEA_ave~STEU_untrained,data=all)
+summary(model)
+```
+
+```{r}
+model=lm(dprime~STEU_score,data=all)
+summary(model)
+```
+
+```{r}
+model=lm(dprime~STEU_sub_score,data=all)
+summary(model)
+```
+
+```{r}
+model=lm(dprime~STEU_untrained,data=all)
+summary(model)
+```
+
+```{r}
+model=lm(accuracy~STEU_score,data=all)
+summary(model)
+```
+
+```{r}
+model=lm(accuracy~STEU_sub_score,data=all)
+summary(model)
+```
+
+```{r}
+model=lm(accuracy~STEU_untrained,data=all)
+summary(model)
+```
+
+###fluency
+```{r}
+model=lm(CEA_ave~total_unique_word,data=all)
+summary(model)
+#significant: higher total unique word higher CEA (b=0.004, p=0.0066)
+```
+
+```{r}
+model=lm(CEA_ave~total_word,data=all)
+summary(model)
+```
+
+```{r}
+model=lm(dprime~total_unique_word,data=all)
+summary(model)
+```
+
+```{r}
+model=lm(dprime~total_word,data=all)
+summary(model)
+```
+
+```{r}
+model=lm(accuracy~total_unique_word,data=all)
+summary(model)
+```
+
+```{r}
+model=lm(accuracy~total_word,data=all)
+summary(model)
+```
+
+```{r}
+model=lm(SegNum_ave~total_unique_word,data=all)
+summary(model)
+```
+
+```{r}
+model=lm(SegNum_ave~total_word,data=all)
+summary(model)
+```
+
+```{r}
+model=lm(MLU_ave~total_unique_word,data=all)
+summary(model)
+```
+
+```{r}
+model=lm(MLU_ave~total_word,data=all)
+summary(model)
+```
+
+
+##Whether condition effect of emoseg preserve controlling for STEU & emo word
+###STEU
+```{r}
+
+model=lm(CEA_ave~condition+STEU_score,data=all)
+summary(model)
+
+library(car)
+Anova(model,type=2)
+```
+
+```{r}
+
+model=lm(dprime~condition+STEU_score,data=all)
+summary(model)
+
+Anova(model,type=2)
+```
+
+```{r}
+
+model=lm(accuracy~condition+STEU_score,data=all)
+summary(model)
+
+Anova(model,type=2)
+```
+
+```{r}
+
+model=lm(CEA_ave~condition+STEU_sub_score,data=all)
+summary(model)
+
+Anova(model,type=2)
+```
+
+```{r}
+
+model=lm(dprime~condition+STEU_sub_score,data=all)
+summary(model)
+
+Anova(model,type=2)
+```
+
+```{r}
+
+model=lm(accuracy~condition+STEU_sub_score,data=all)
+summary(model)
+
+Anova(model,type=2)
+```
+
+```{r}
+
+model=lm(CEA_ave~condition+STEU_untrained,data=all)
+summary(model)
+
+Anova(model,type=2)
+```
+
+```{r}
+
+model=lm(dprime~condition+STEU_untrained,data=all)
+summary(model)
+
+Anova(model,type=2)
+```
+
+```{r}
+
+model=lm(accuracy~condition+STEU_untrained,data=all)
+summary(model)
+
+Anova(model,type=2)
+```
+
+###fluency
+```{r}
+
+model=lm(CEA_ave~total_unique_word+condition,data=all)
+summary(model)
+
+Anova(model,type=2)
+```
+
+```{r}
+
+model=lm(dprime~condition+total_unique_word,data=all)
+summary(model)
+
+Anova(model,type=2)
+```
+
+```{r}
+
+model=lm(accuracy~condition+total_unique_word,data=all)
+summary(model)
+
+Anova(model,type=2)
+```
+
+```{r}
+
+model=lm(SegNum_ave~condition+total_unique_word,data=all)
+summary(model)
+
+Anova(model,type=2)
+```
+
+```{r}
+
+model=lm(MLU_ave~condition+total_unique_word,data=all)
+summary(model)
+
+Anova(model,type=2)
+```
+
+
+
+```{r}
+
+model=lm(CEA_ave~total_word+condition,data=all)
+summary(model)
+
+Anova(model,type=2)
+```
+
+```{r}
+
+model=lm(dprime~condition+total_word,data=all)
+summary(model)
+
+Anova(model,type=2)
+```
+
+```{r}
+
+model=lm(accuracy~condition+total_word,data=all)
+summary(model)
+
+Anova(model,type=2)
+```
+
+```{r}
+
+model=lm(SegNum_ave~condition+total_word,data=all)
+summary(model)
+
+Anova(model,type=2)
+```
+
+```{r}
+
+model=lm(MLU_ave~condition+total_word,data=all)
+summary(model)
+
+Anova(model,type=2)
+```
+
+
+##Whether STEU-emoseg link vary across conditions?
+###CEA
+```{r,echo=FALSE}
+model=lm(CEA_ave~STEU_score*condition,data=all) #
+summary(model)
+```
+
+
+```{r}
+sim_slopes(
+  model,
+  STEU_score,
+  condition,
+  modx.values = NULL,
+  centered = "all",
+  cond.int = TRUE,
+  confint=TRUE
+)
+```
+
+```{r,echo=FALSE}
+model=lm(CEA_ave~STEU_sub_score*condition,data=all) 
+summary(model)
+```
+
+```{r}
+sim_slopes(
+  model,
+  STEU_sub_score,
+  condition,
+  modx.values = NULL,
+  centered = "all",
+  cond.int = TRUE,
+  confint=TRUE
+)
+```
+
+```{r,echo=FALSE}
+model=lm(CEA_ave~STEU_untrained*condition,data=all)
+summary(model)
+```
+
+```{r}
+sim_slopes(
+  model,
+  STEU_untrained,
+  condition,
+  modx.values = NULL,
+  centered = "all",
+  cond.int = TRUE,
+  confint=TRUE
+)
+```
+
+```{r,echo=FALSE}
+
+model=lm(CEA_ave~total_unique_word*condition,data=all)
+summary(model)
+```
+
+```{r}
+sim_slopes(
+  model,
+  total_unique_word,
+  condition,
+  modx.values = NULL,
+  centered = "all",
+  cond.int = TRUE,
+  confint=TRUE
+)
+```
+
+```{r,echo=FALSE}
+
+model=lm(CEA_ave~total_word*condition,data=all)
+summary(model)
+```
+
+```{r}
+sim_slopes(
+  model,
+  total_word,
+  condition,
+  modx.values = NULL,
+  centered = "all",
+  cond.int = TRUE,
+  confint=TRUE
+)
+```
+
+
+
+
+###accuracy
+```{r,echo=FALSE}
+model=lm(accuracy~STEU_score*condition,data=all) #
+summary(model)
+```
+
+```{r}
+sim_slopes(
+  model,
+  STEU_score,
+  condition,
+  modx.values = NULL,
+  centered = "all",
+  cond.int = TRUE,
+  confint=TRUE
+)
+```
+
+```{r,echo=FALSE}
+model=lm(accuracy~STEU_sub_score*condition,data=all) 
+summary(model)
+```
+
+```{r}
+sim_slopes(
+  model,
+  STEU_sub_score,
+  condition,
+  modx.values = NULL,
+  centered = "all",
+  cond.int = TRUE,
+  confint=TRUE
+)
+```
+
+```{r,echo=FALSE}
+model=lm(accuracy~STEU_untrained*condition,data=all)
+summary(model)
+```
+
+```{r}
+sim_slopes(
+  model,
+  STEU_untrained,
+  condition,
+  modx.values = NULL,
+  centered = "all",
+  cond.int = TRUE,
+  confint=TRUE
+)
+```
+
+```{r,echo=FALSE}
+
+model=lm(accuracy~total_unique_word*condition,data=all)
+summary(model)
+```
+
+```{r}
+sim_slopes(
+  model,
+  total_unique_word,
+  condition,
+  modx.values = NULL,
+  centered = "all",
+  cond.int = TRUE,
+  confint=TRUE
+)
+```
+
+```{r,echo=FALSE}
+
+model=lm(accuracy~total_word*condition,data=all)
+summary(model)
+```
+
+```{r}
+sim_slopes(
+  model,
+  total_word,
+  condition,
+  modx.values = NULL,
+  centered = "all",
+  cond.int = TRUE,
+  confint=TRUE
+)
+```
+
+###dprime
+
+```{r,echo=FALSE}
+model=lm(dprime~STEU_score*condition,data=all) #
+summary(model)
+```
+
+```{r}
+sim_slopes(
+  model,
+  STEU_score,
+  condition,
+  modx.values = NULL,
+  centered = "all",
+  cond.int = TRUE,
+  confint=TRUE
+)
+```
+
+
+```{r,echo=FALSE}
+model=lm(dprime~STEU_sub_score*condition,data=all) 
+summary(model)
+confint(model)
+```
+
+```{r}
+sim_slopes(
+  model,
+  STEU_sub_score,
+  condition,
+  modx.values = NULL,
+  centered = "all",
+  cond.int = TRUE,
+  confint=TRUE
+)
+```
+
+
+```{r,echo=FALSE}
+model=lm(dprime~STEU_untrained*condition,data=all)
+summary(model)
+```
+
+```{r}
+sim_slopes(
+  model,
+  STEU_untrained,
+  condition,
+  modx.values = NULL,
+  centered = "all",
+  cond.int = TRUE,
+  confint=TRUE
+)
+```
+
+
+```{r,echo=FALSE}
+
+model=lm(dprime~total_unique_word*condition,data=all)
+summary(model)
+```
+
+```{r}
+sim_slopes(
+  model,
+  total_unique_word,
+  condition,
+  modx.values = NULL,
+  centered = "all",
+  cond.int = TRUE,
+  confint=TRUE
+)
+```
+
+```{r,echo=FALSE}
+
+model=lm(dprime~total_word*condition,data=all)
+summary(model)
+```
+
+```{r}
+sim_slopes(
+  model,
+  total_word,
+  condition,
+  modx.values = NULL,
+  centered = "all",
+  cond.int = TRUE,
+  confint=TRUE
+)
+```
+
+##fluency & NUL
+```{r}
+nul <- read.csv("Processed Data/Level2_output/lab_nul_outremoved.csv")
+lab <- full_join(all,nul,by=c("subjectID"))
+```
+
+```{r}
+model=lm(NUL_ave~total_unique_word,data=lab)
+summary(model)
+
+model=lm(NUL_ave~total_word,data=lab)
+summary(model)
+```
+
+```{r}
+model=lm(CEA_ave~NUL_ave,data=lab)
+summary(model)
+
+model=lm(CEA_ave~NUL_ave+SegNum_ave,data=lab)
+summary(model)
+
+model=lm(accuracy~NUL_ave+SegNum_ave,data=lab)
+summary(model)
+
+model=lm(dprime~NUL_ave,data=lab)
+summary(model)
+```
+
+
+
+
+#within cell CEs
+# load data
+```{r, echo=FALSE,message=FALSE}
+all.cea=(read.csv("Processed Data/Level2_output/within_CEA_outlierremoved.csv"))[,-1]
+all.acc=(read.csv("Processed Data/Level2_output/within_acc_outremoved.csv"))[,-1]
+names(all.acc)[1]="subjectID"
+all.optdev=(read.csv("Processed Data/Level2_output/within_optdev_outremoved.csv"))[,-1]
+all.mlu=(read.csv("Processed Data/Level2_output/mlu_outremoved.csv"))[,-1]
+all.sdt=(read.csv("Processed Data/Level2_output/within_SDT_outlierremoved.csv"))[,-1]
+all.sdt <- all.sdt %>%
+  dplyr::select("Participant","dprime","c","condition")
+names(all.sdt)[1]="subjectID"
+
+
+#all.steu=(read.csv("Processed Data/Level2_output/steu_outremoved.csv"))[,-1]
+all.steu=(read.csv("Processed Data/Level2_output/steu_full_outremoved.csv"))[,-1] #remove steu outlier using entire sample instead of by group
+
+all.steu=all.steu %>% dplyr::select(subjectID,condition,STEU_score,STEU_sub_score,STEU_untrained)
+all.emo.verb=(read.csv("Processed Data/Level2_output/emo_verb_outremoved.csv"))[,-1]
+
+```
+
+```{r, echo=FALSE,message=FALSE}
+all=full_join(all.cea,all.acc,by=c("subjectID","condition"))
+all=full_join(all,all.sdt,by=c("subjectID","condition"))
+all=full_join(all,all.optdev,by=c("subjectID","condition"))
+all=full_join(all,all.steu,by=c("subjectID","condition"))
+all=full_join(all,all.emo.verb,by=c("subjectID","condition"))
+all=full_join(all,all.mlu,by=c("subjectID","condition"))
+
+
+```
+
+```{r}
+# outlier summary
+full.sub=all %>% dplyr::select(subjectID, condition,CEA_ave,dprime,c,ave.c.devi,accuracy)
+with_NA <- full.sub[!complete.cases(full.sub), ] #6
+num_NA <- sum(is.na(with_NA)) #9
+
+check=with_NA %>% 
+  group_by(condition) %>%
+  dplyr::summarize(total=n())
+
+outlier_summary <- with_NA %>%
+  group_by(condition) %>%
+  dplyr::summarise(across(-c(subjectID), ~ sum(is.na(.x)), .names = "{.col}")) %>%
+  ungroup()
+
+full.sub.1=all %>% dplyr::select(subjectID, condition,STEU_score,STEU_sub_score,STEU_untrained,total_unique_word,total_word)
+with_NA <- full.sub.1[!complete.cases(full.sub.1), ] 
+num_NA <- sum(is.na(with_NA)) 
+
+check=with_NA %>% 
+  group_by(condition) %>%
+  dplyr::summarize(total=n())
+
+outlier_summary_other <- with_NA %>%
+  group_by(condition) %>%
+  dplyr::summarise(across(-c(subjectID), ~ sum(is.na(.x)), .names = "{.col}")) %>%
+  ungroup()
+
+
+
+```
+
+
+
+# Simple descriptive variables (video-level)
+
+
+## CEA descriptives
+
+```{r,echo=FALSE}
+desc_CEA <- describeBy(all.cea$CEA_ave, group = all.cea$condition, mat = TRUE)
+rownames(desc_CEA) <- desc_CEA$group1
+desc_CEA <- desc_CEA[,-1]  # drop the group1 column since it's now rownames
+desc_CEA
+
+desc_CEA <- data.frame(desc_CEA)
+desc_CEA$metric="CEA"
+```
+
+## d' descriptives
+
+```{r,echo=FALSE}
+desc_dprime <- describeBy(all.sdt$dprime, group = all.sdt$condition, mat = TRUE)
+rownames(desc_dprime) <- desc_dprime$group1
+desc_dprime <- desc_dprime[,-1]  # drop the group1 column since it's now rownames
+desc_dprime
+
+desc_dprime <- data.frame(desc_dprime)
+desc_dprime$metric="dprime"
+```
+
+## c descriptives
+
+```{r,echo=FALSE}
+desc_c <- describeBy(all.sdt$c, group = all.sdt$condition, mat = TRUE)
+rownames(desc_c) <- desc_c$group1
+desc_c <- desc_c[,-1]  # drop the group1 column since it's now rownames
+desc_c
+
+desc_c <- data.frame(desc_c)
+desc_c$metric="c"
+```
+
+## accuracy descriptives
+
+```{r,echo=FALSE}
+desc_acc <- describeBy(all.acc$accuracy, group = all.acc$condition, mat = TRUE)
+rownames(desc_acc) <- desc_acc$group1
+desc_acc <- desc_acc[,-1]  # drop the group1 column since it's now rownames
+desc_acc
+
+desc_acc <- data.frame(desc_acc)
+
+desc_acc <- data.frame(desc_acc)
+desc_acc$metric="Accuracy"
+
+```
+
+##deviation descriptives
+
+```{r,echo=FALSE}
+desc_optdev <- describeBy(all.optdev$ave.c.devi, group = all.acc$condition, mat = TRUE)
+rownames(desc_optdev) <- desc_optdev$group1
+desc_optdev <- desc_optdev[,-1]  # drop the group1 column since it's now rownames
+desc_optdev
+
+desc_optdev <- data.frame(desc_optdev)
+
+desc_optdev <- data.frame(desc_optdev)
+desc_optdev$metric="optimal_c_deviation"
+```
+
+```{r}
+desc <- rbind(desc_SegNum,desc_mlu,desc_CEA,desc_dprime,desc_c,desc_acc,desc_optdev)
+desc <- rename(desc,condition=group1)
+
+```
+
+##descipritve - visual
+```{r}
+df_fmt <- desc %>%
+  mutate(
+    value = sprintf("%.2f (%.2f)", mean, sd)
+  ) %>%
+  select(condition, metric, value)
+```
+
+```{r}
+table_df <- df_fmt %>%
+  pivot_wider(
+    names_from = condition,
+    values_from = value
+  ) %>%
+  arrange(metric)
+
+table_df <- table_df %>% relocate(3, .after = last_col())
+table_df <- table_df %>% relocate(2, .after = last_col())
+
+table_df
+```
+## CE descriptives
+
+```{r,echo=FALSE,message=FALSE}
+ce.proportion.lab=(read.csv("Processed Data/Level1_output/lab_opt_beta_bynumber.csv"))[,-1]
+ce.proportion.seg=(read.csv("Processed Data/Level1_output/seg_opt_beta_bynumber.csv"))[,-1]
+ce.proportion.count=(read.csv("Processed Data/Level1_output/count_opt_beta_bynumber.csv"))[,-1]
+```
+
+
+```{r,echo=FALSE}
+ce.proportion.lab$condition="WithLabel"
+
+ce.proportion.seg$condition="NoLabel"
+
+ce.proportion.count$condition="Counting"
+
+
+full.ce=rbind(ce.proportion.lab,ce.proportion.seg,ce.proportion.count)
+```
+
+```{r,echo=FALSE}
+desc_ce <- describeBy(full.ce$CE, group = full.ce$condition, mat = TRUE)
+rownames(desc_ce) <- desc_ce$group1
+desc_ce <- desc_ce[,-1]  # drop the group1 column since it's now rownames
+desc_ce
+```
+
+```{r,echo=FALSE}
+desc_ce <- describeBy(full.ce$CE_per, group = full.ce$condition, mat = TRUE)
+rownames(desc_ce) <- desc_ce$group1
+desc_ce <- desc_ce[,-1]  # drop the group1 column since it's now rownames
+desc_ce
+```
+
+
+#video-level
+
+## CE/non-CE proportion
+```{r,echo=FALSE,message=FALSE}
+ce.proportion.lab=(read.csv("Processed Data/Level1_output/lab_opt_beta_bynumber.csv"))[,-1]
+ce.proportion.seg=(read.csv("Processed Data/Level1_output/seg_opt_beta_bynumber.csv"))[,-1]
+ce.proportion.count=(read.csv("Processed Data/Level1_output/count_opt_beta_bynumber.csv"))[,-1]
+```
+
+```{r,echo=FALSE,message=FALSE}
+ce.proportion.lab <- ce.proportion.lab %>%
+    mutate(
+      video = dplyr::recode(
+        video,
+        '645254162' = "twinster",
+        '645248589' = "extermis_ER",
+        '645249378' = "extremis_docpatient",
+        '645253441' = "slove_dinner",
+        '645255968' = "unrest",
+        '645250080' = "Found",
+        '645251074' = "mindgap_fight",
+        '645251954' = "mindgap_grave",
+        '645247244' = "ForAkheem"
+      )
+    ) %>%
+    mutate(video = as.factor(video)) 
+
+ce.proportion.lab[,c(5:7)]=round(ce.proportion.lab[,c(5:7)], digits = 2)
+
+ce.proportion.seg <- ce.proportion.seg %>%
+    mutate(
+      video = dplyr::recode(
+        video,
+        '645254162' = "twinster",
+        '645248589' = "extermis_ER",
+        '645249378' = "extremis_docpatient",
+        '645253441' = "slove_dinner",
+        '645255968' = "unrest",
+        '645250080' = "Found",
+        '645251074' = "mindgap_fight",
+        '645251954' = "mindgap_grave",
+        '645247244' = "ForAkheem"
+      )
+    ) %>%
+    mutate(video = as.factor(video)) 
+
+ce.proportion.seg[,c(5:7)]=round(ce.proportion.seg[,c(5:7)], digits = 2)
+
+ce.proportion.count <- ce.proportion.count %>%
+    mutate(
+      video = dplyr::recode(
+        video,
+        '645254162' = "twinster",
+        '645248589' = "extermis_ER",
+        '645249378' = "extremis_docpatient",
+        '645253441' = "slove_dinner",
+        '645255968' = "unrest",
+        '645250080' = "Found",
+        '645251074' = "mindgap_fight",
+        '645251954' = "mindgap_grave",
+        '645247244' = "ForAkheem"
+      )
+    ) %>%
+    mutate(video = as.factor(video)) 
+
+ce.proportion.count[,c(5:7)]=round(ce.proportion.count[,c(5:7)], digits = 2)
+
+
+```
+
+
+```{r,echo=FALSE,message=FALSE}
+#Tables for ce proportion
+ft <- flextable(ce.proportion.lab)
+ft <- autofit(ft)  # adjusts column widths
+ft <- width(ft, width = 1.0)           # set all columns to fixed width
+ft <- flextable::fit_to_width(ft, max_width = 8)
+ft <- set_caption(ft, caption = "Labeling - CE/non-CE proportion")
+ft
+
+ft <- flextable(ce.proportion.seg)
+ft <- autofit(ft)  # adjusts column widths
+ft <- width(ft, width = 1.0)           # set all columns to fixed width
+ft <- flextable::fit_to_width(ft, max_width = 8)
+ft <- set_caption(ft, caption = "No label- CE/non-CE proportion")
+ft
+
+ft <- flextable(ce.proportion.count)
+ft <- autofit(ft)  # adjusts column widths
+ft <- width(ft, width = 1.0)           # set all columns to fixed width
+ft <- flextable::fit_to_width(ft, max_width = 8)
+ft <- set_caption(ft, caption = "Counting - CE/non-CE proportion")
+ft
+
+
+```
+
+```{r,echo=FALSE,message=FALSE}
+ce.proportion.long.lab = ce.proportion.lab %>% pivot_longer(cols=c(CE,NonCE),names_to="Type",values_to="Number")
+ce.proportion.long.seg = ce.proportion.seg %>% pivot_longer(cols=c(CE,NonCE),names_to="Type",values_to="Number")
+ce.proportion.long.count = ce.proportion.count %>% pivot_longer(cols=c(CE,NonCE),names_to="Type",values_to="Number")
+```
+
+```{r,echo=FALSE,message=FALSE}
+ggplot(ce.proportion.long.lab, aes(x = Type, y = Number, fill = Type)) +
+  geom_col(width = 0.7) +
+  geom_text(aes(label = Number), 
+            vjust = 0.5, size = 3) +
+  facet_wrap(~video, scales = "free_y") +
+  theme_minimal(base_size = 14) +
+  labs(title = "Labeling - CE/nonCE",
+       x = "Response type",
+       y = "Value") +
+  theme(
+    #legend.position = "none",
+    strip.text = element_text(face = "bold")
+  )
+
+ggplot(ce.proportion.long.seg, aes(x = Type, y = Number, fill = Type)) +
+  geom_col(width = 0.7) +
+  geom_text(aes(label = Number), 
+            vjust = 0.5, size = 3) +
+  facet_wrap(~video, scales = "free_y") +
+  theme_minimal(base_size = 14) +
+  labs(title = "No label - CE/nonCE",
+       x = "Response type",
+       y = "Value") +
+  theme(
+    #legend.position = "none",
+    strip.text = element_text(face = "bold")
+  )
+
+ggplot(ce.proportion.long.count, aes(x = Type, y = Number, fill = Type)) +
+  geom_col(width = 0.7) +
+  geom_text(aes(label = Number), 
+            vjust = 0.5, size = 3) +
+  facet_wrap(~video, scales = "free_y") +
+  theme_minimal(base_size = 14) +
+  labs(title = "Counting - CE/nonCE",
+       x = "Response type",
+       y = "Value") +
+  theme(
+    #legend.position = "none",
+    strip.text = element_text(face = "bold")
+  )
+
+```
+
+
+## Proportion of decision/response (hit, miss, fa, cr)
+```{r,echo=FALSE,message=FALSE}
+summary.wide.lab=(read.csv("Processed Data/Level1_output/lab_response_proportion.csv"))[,-1]
+summary.wide.seg=(read.csv("Processed Data/Level1_output/seg_response_proportion.csv"))[,-1]
+summary.wide.count=(read.csv("Processed Data/Level1_output/count_response_proportion.csv"))[,-1]
+
+
+df.long.lab=(read.csv("Processed Data/Level1_output/lab_response_proportion_long.csv"))[,-1]
+df.long.seg=(read.csv("Processed Data/Level1_output/seg_response_proportion_long.csv"))[,-1]
+df.long.count=(read.csv("Processed Data/Level1_output/count_response_proportion_long.csv"))[,-1]
+
+```
+
+```{r,echo=FALSE,message=FALSE,warning=FALSE}
+ft <- flextable(summary.wide.lab)
+ft <- autofit(ft)  # adjusts column widths
+ft <- set_caption(ft, caption = "Labeling - Response proportion")
+ft
+
+ft <- flextable(summary.wide.seg)
+ft <- autofit(ft)  # adjusts column widths
+ft <- set_caption(ft, caption = "No label - Response proportion")
+ft
+
+ft <- flextable(summary.wide.count)
+ft <- autofit(ft)  # adjusts column widths
+ft <- set_caption(ft, caption = "Counting - Response proportion")
+ft
+
+```
+
+```{r,echo=FALSE,message=FALSE}
+ggplot(df.long.lab,
+       aes(x = Veracity,                # one bar per veracity group
+           y = proportion,
+           fill = type)) +
+  geom_col(width = 0.7, position = "stack") +
+  geom_text(aes(label = round(proportion, 2)),
+            position = position_stack(vjust = 0.5), # centers text in stacks
+            size = 3) +
+  facet_wrap(~Stimuli, scales = "free_y") +
+  theme_minimal(base_size = 14) +
+  labs(title = "Labeling - Response proportion",
+       x = "Trial type (CE / nonCE)",
+       y = "Proportion") +
+  theme(
+    strip.text = element_text(face = "bold")
+  )
+
+ggplot(df.long.seg,
+       aes(x = Veracity,                # one bar per veracity group
+           y = proportion,
+           fill = type)) +
+  geom_col(width = 0.7, position = "stack") +
+  geom_text(aes(label = round(proportion, 2)),
+            position = position_stack(vjust = 0.5), # centers text in stacks
+            size = 3) +
+  facet_wrap(~Stimuli, scales = "free_y") +
+  theme_minimal(base_size = 14) +
+  labs(title = "No label - Response proportion",
+       x = "Trial type (CE / nonCE)",
+       y = "Proportion") +
+  theme(
+    strip.text = element_text(face = "bold")
+  )
+
+ggplot(df.long.count,
+       aes(x = Veracity,                # one bar per veracity group
+           y = proportion,
+           fill = type)) +
+  geom_col(width = 0.7, position = "stack") +
+  geom_text(aes(label = round(proportion, 2)),
+            position = position_stack(vjust = 0.5), # centers text in stacks
+            size = 3) +
+  facet_wrap(~Stimuli, scales = "free_y") +
+  theme_minimal(base_size = 14) +
+  labs(title = "Counting - Response proportion",
+       x = "Trial type (CE / nonCE)",
+       y = "Proportion") +
+  theme(
+    strip.text = element_text(face = "bold")
+  )
+
+
+```
+
+
+# ANOVA - group difference in emo seg
+
+```{r,echo=FALSE}
+FULL=all
+
+FULL$condition=as.factor(FULL$condition)
+FULL$condition <- relevel(FULL$condition, ref = "NoLabel")
+```
+
+```{r,echo=FALSE}
+shapiro.test(FULL$dprime)#normal
+shapiro.test(FULL$STEU_score)#not normal
+```
+
+
+```{r,echo=FALSE}
+#test assumptions
+leveneTest(dprime~condition,data=all) #equal variance for dprime
+leveneTest(c~condition,data=all) #equal variance for c
+```
+
+## CEA
+```{r,echo=FALSE}
+fit3=aov(CEA_ave~condition,data=all)
+summary(fit3) #no main effect of condition in CEA
+
+tukey_result <- TukeyHSD(fit3)
+print(tukey_result) 
+
+```
+
+## accuracy
+main effect of condition in accuracy
+```{r,echo=FALSE}
+
+fit4=aov(accuracy~condition,data=all)
+summary(fit4) 
+```
+
+### pairwise comparison
+labeling lower than nolabel and counting, counting - no label no difference
+```{r}
+tukey_result <- TukeyHSD(fit4)
+print(tukey_result)
+```
+
+### effect size
+```{r}
+eta_squared(fit4) 
+```
+
+## dprime
+main effect of condition in dprime
+```{r,echo=FALSE}
+fit1=aov(dprime~condition,data=all)
+summary(fit1) #
+```
+
+### pairwise comparison
+no labeling no difference in dprime with counting, both higher than with-label
+```{r}
+#pairwise:
+options(es.use_symbols = TRUE) 
+tukey_result <- TukeyHSD(fit1)
+print(tukey_result) #
+```
+
+### effect size
+```{r}
+eta_squared(fit1) #eta2 = 0.09
+```
+
+
+## c
+no main effect of condition in c
+```{r,echo=FALSE}
+
+fit2=aov(c~condition,data=all)
+summary(fit2) #
+tukey_result <- TukeyHSD(fit2)
+print(tukey_result)
+```
+
+##deviation from optimal c
+main effect of condition in deviation from optimal c
+```{r,echo=FALSE}
+
+fit5=aov(ave.c.devi~condition,data=all)
+summary(fit5) #
+```
+
+### pairwise comparison
+labeling group deviate less than nolabeling group and marginally lower than the counting group; no difference between counting and nolabel group
+```{r}
+tukey_result <- TukeyHSD(fit5)
+print(tukey_result)
+```
+
+### effect size
+```{r}
+eta_squared(fit5) #eta2 = 0.04
+```
+
+

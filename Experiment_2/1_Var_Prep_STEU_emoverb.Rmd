@@ -1,0 +1,242 @@
+---
+title: "1_Var_Prep_STEU_emoverb"
+author: "Zhimeng Li"
+date: "2024-10-27"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#Load packages
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+list.of.packages = c("base","tidyr", "readr","dplyr", "ggplot2","psych" , "ggpubr","stats","rstatix", "tm")
+
+new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
+if(length(new.packages) > 0) {install.packages(new.packages)}
+lapply(list.of.packages, require, character.only=T)
+```
+
+```{r}
+#imported manually cleaned emotion verb fluency data (removed filler phrases, spelling fixed)
+ew=read.csv("Processed Data/Level0_output/deid_emoverb_raw_cleaned.csv")
+ew=ew[,-1]
+```
+
+```{r}
+stopwords=read.csv("stopwords_emv.csv") #customized stopwords list
+stopwords=stopwords$stopword
+text = ew$Q1.Transcription
+docs <- Corpus(VectorSource(text))
+toSpace <- content_transformer(function (x , pattern ) gsub(pattern, " ", x))
+docs <- tm_map(docs, toSpace, "/")
+docs <- tm_map(docs, toSpace, "@")
+docs <- tm_map(docs, toSpace, "\\|")
+# Convert the text to lower case
+docs <- tm_map(docs, content_transformer(tolower))
+# Remove numbers
+docs <- tm_map(docs, removeNumbers)
+# Remove customized stopwords
+docs <- tm_map(docs, removeWords, stopwords)
+# Remove punctuations
+replacePunctuation <- content_transformer(function(x) {return (gsub("[[:punct:]]","", x))})
+docs <- tm_map(docs, replacePunctuation)
+# Eliminate extra white spaces
+docs <- tm_map(docs, stripWhitespace)
+
+e_words = unlist(docs)
+e_words = e_words[-length(e_words)] #remove the dummy last element
+ew$Final_EmoWords = e_words
+```
+
+```{r}
+#for each subject, we compute the number of total words generated and the number of unique words generated
+emo.verb.fluency=data.frame()
+subj=unique(ew$subjectID)
+for (i in 1:nrow(ew)){
+  temp=ew %>% filter (subjectID == subj[i])
+  word.list=unlist(strsplit(temp$Final_EmoWords, " "))
+  unique.word.list=unique(word.list)
+  emo.verb.fluency[i,"subjectID"]=temp$subjectID
+  emo.verb.fluency[i,"condition"]=temp$condition
+  emo.verb.fluency[i,"total_word"]=length(word.list)
+  emo.verb.fluency[i,"total_unique_word"]=length(unique.word.list)
+}
+```
+
+```{r}
+write.csv(emo.verb.fluency,"Processed Data/Level1_output/full_emo_verb_fluency.csv")
+```
+
+
+
+#check the words at the consensus events to see which are candidates to be trained
+
+```{r}
+#Conduct the basic text cleaning process
+ew=read.csv("Processed Data/Level1_output/full_CEA_IdentifiedByIndividuals.csv")
+ew=ew[,-1]
+ew=ew %>% filter(subjectID %in% full.lab.sdt.agg.all$Participant) #keep only the lab group
+
+stopwords=read.csv("stopwords_final.csv")
+stopwords=stopwords$stopword
+text = ew$word
+docs <- Corpus(VectorSource(text))
+toSpace <- content_transformer(function (x , pattern ) gsub(pattern, " ", x))
+docs <- tm_map(docs, toSpace, "/")
+docs <- tm_map(docs, toSpace, "@")
+docs <- tm_map(docs, toSpace, "\\|")
+# Convert the text to lower case
+docs <- tm_map(docs, content_transformer(tolower))
+# Remove numbers
+docs <- tm_map(docs, removeNumbers)
+# Remove english common stopwords
+docs <- tm_map(docs, removeWords, stopwords)
+# Remove punctuations
+replacePunctuation <- content_transformer(function(x) {return (gsub("[[:punct:]]"," ", x))})
+docs <- tm_map(docs, replacePunctuation)
+# Eliminate extra white spaces
+docs <- tm_map(docs, stripWhitespace)
+
+e_words = unlist(docs)
+e_words = e_words[-length(e_words)] #remove the dummy last element
+ew$Final_EmoWords = e_words
+ew.allwords=ew #create a copy that has entries by timestamps
+```
+
+```{r,echo=FALSE,message=FALSE,warning=FALSE}
+#In some incidences, one subject may provide more than 1 word for a given event, we will split these words into independent rows. 
+start_time <- Sys.time()
+
+
+i=1
+while(1){
+  if(nchar(ew[i,'Final_EmoWords'])!=0){ #If there's a final cleaned emo labels for this critical event instance
+    ew[i,'Final_EmoWords']<-str_trim(ew[i,'Final_EmoWords'])
+    currentlist<-unlist(strsplit(ew[i,'Final_EmoWords'], " ", perl = TRUE)) #Form a list of all words within this label instance
+    stepflag=length(currentlist)
+    #If there's more than one labels in this row (i.e., pausing instance), we then isolate this row, split it into numbers of row according to labels contained, then merge it back with the rest of the data.
+    if(stepflag>1){
+      previouslist<-ew[1:i-1,]
+      latterlist<-ew[i+1:nrow(ew),]
+      temp<-ew[i,1:(ncol(ew)-1)]
+      jointlist1<-temp[rep(1:nrow(temp),each=stepflag),]
+      Final_EmoWords<-t(t(currentlist))
+      jointlist<-cbind(jointlist1,Final_EmoWords)
+      ew<-rbind(previouslist,jointlist,latterlist)
+      ew=na.omit(ew)
+    }
+  }else stepflag=1
+  i=i+stepflag
+  if(is.na(ew[i,'Final_EmoWords'])) break 
+}
+row.names(ew)<-unlist(c(1:nrow(ew)))
+end_time <- Sys.time()
+end_time - start_time
+```
+
+
+```{r}
+#Load the dataframe
+s2_sasdf=ew
+s2_sas_subset=dplyr::select(s2_sasdf,"video","Final_EmoWords","Critical_Event_Timestamp")
+check=unique(s2_sas_subset$Critical_Event_Timestamp) #this should be 75
+
+
+# Apply the lemmatize_words function to data frames
+
+text=s2_sas_subset$Final_EmoWords
+docs <- Corpus(VectorSource(text))
+docs <- tm_map(docs, textstem::lemmatize_strings)
+docs <- tm_map(docs, PlainTextDocument)
+word_df <- data.frame(text = unlist(docs[["content"]][["content"]]), stringsAsFactors = FALSE)
+names(word_df)[1]="Lemmatized_word"
+s2_sas_subset=cbind(s2_sas_subset,word_df)
+
+s2_sas_subset = s2_sas_subset  %>% mutate(video=recode(video, 
+                         '645254162'= "Twinster",
+                         '645248589' = "Extremis_1",
+                         '645249378' = "Extremis_2",
+                         '645253441' = "A Secret Love",
+                         '645255968' ="Unrest",
+                         '645250080' = "Found", 
+                         '645251074' = "Minding the Gap_1",
+                         '645251954' = "Minding the Gap_2",
+                         '645247244' = "For Akheem")) 
+
+```
+
+```{r}
+#Dataframes with count of labels
+videolist=data.frame(as.character(unique(s2_sas_subset$video)))
+names(videolist)[1]="video"
+videolist = videolist  %>% mutate(video=recode(video, 
+                         '645254162'= "Twinster",
+                         '645248589' = "Extremis_1",
+                         '645249378' = "Extremis_2",
+                         '645253441' = "A Secret Love",
+                         '645255968' ="Unrest",
+                         '645250080' = "Found", 
+                         '645251074' = "Minding the Gap_1",
+                         '645251954' = "Minding the Gap_2",
+                         '645247244' = "For Akheem")) 
+```
+
+```{r}
+sas_count_full = list()
+sas_count_10=list()
+for (i in 1:nrow(videolist)){
+  temp=subset(s2_sas_subset,video==videolist[i,1])
+  temp_count=data.frame(table(temp$Lemmatized_word))
+  names(temp_count)[1]="word"
+  temp_subset=temp_count %>%
+    arrange(desc(Freq)) %>%
+    slice(1:10)
+  sas_count_full[[i]]=temp_count
+  names(sas_count_full)[i]=videolist[i,1]
+  sas_count_10[[i]]=temp_subset
+  names(sas_count_10)[i]=videolist[i,1]
+}
+library(data.table)
+this=as.data.table(sas_count_10)
+#write.csv(this,"labelgroup_top10labels.csv")
+```
+
+```{r}
+#Plot the distribution of top 10 labels
+
+for (i in 1:length(sas_count_10)){
+  print(ggplot(data=data.frame(sas_count_10[[i]]), aes(x=word, y=Freq)) +
+  geom_bar(stat="identity", width=0.5)+
+  ggtitle(paste(names(sas_count_10)[i],"Top 10 labels")))
+}
+
+```
+
+#generate the top most word for each CE of each video (instead of top 10 from each video)
+```{r}
+sas_count_byce_full = list()
+#sas_count_10=list()
+for (i in 1:nrow(videolist)){
+  temp=subset(s2_sas_subset,video==videolist[i,1])
+  temp$Critical_Event_Timestamp=as.character(temp$Critical_Event_Timestamp)
+  temp.ce=unique(temp$Critical_Event_Timestamp)
+  sas_count_byce=data.frame(CE=temp.ce,topword=NA)
+  for (j in 1:length(temp.ce)){
+    temp.subset=subset(temp,Critical_Event_Timestamp==temp.ce[j])
+    temp.subset.count=data.frame(table(temp.subset$Lemmatized_word)) %>% arrange(desc(Freq))
+    names(temp.subset.count)[1]="word"
+    temp.top.word=as.character(temp.subset.count[1,1])
+    sas_count_byce[j,"topword"]=temp.top.word
+  }
+  sas_count_byce_full[[i]]=sas_count_byce
+  names(sas_count_byce_full)[i]=videolist[i,1]
+}
+library(data.table)
+this=as.data.table(sas_count_byce_full)
+
+
+#write.csv(this,"labelgroup_top10labels.csv")
+```
+

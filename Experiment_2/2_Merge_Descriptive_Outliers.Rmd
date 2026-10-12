@@ -1,0 +1,919 @@
+---
+title: "2_Merge_Descriptive_Outliers"
+author: "Zhimeng Li"
+date: "2023-11-07"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#Load packages
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+list.of.packages = c("base","spearmanCI","tidyr", "readr","dplyr", "ggplot2","psych" , "ggpubr","stats","rstatix", "pwr","Hmisc","ggfortify","apaTables","kableExtra", "Routliers","lawstat")
+
+new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
+if(length(new.packages) > 0) {install.packages(new.packages)}
+lapply(list.of.packages, require, character.only=T)
+```
+
+
+
+#outlier functions
+```{r}
+#if the data is not normally distributed but symmetric, we recalculate the b-value
+compute_b_value <- function(x) {
+  # Normalize the data (z-score)
+  z <- (x - mean(x, na.rm=TRUE)) / sd(x, na.rm=TRUE)
+  # Get the 75th percentile
+  Q75 <- quantile(z, 0.75,na.rm=TRUE)
+  # Compute b value
+  b_value <- 1 / Q75
+  return(b_value)
+}
+```
+
+```{r}
+#for not normal and asymmetric data, run DoubleMad
+DoubleMAD <- function(x, zero.mad.action="warn"){
+   # The zero.mad.action determines the action in the event of an MAD of zero.
+   # Possible values: "stop", "warn", "na" and "warn and na".
+   x         <- x[!is.na(x)]
+   m         <- median(x)
+   abs.dev   <- abs(x - m)
+   left.mad  <- median(abs.dev[x<=m])
+   right.mad <- median(abs.dev[x>=m])
+   if (left.mad == 0 || right.mad == 0){
+      if (zero.mad.action == "stop") stop("MAD is 0")
+      if (zero.mad.action %in% c("warn", "warn and na")) warning("MAD is 0")
+      if (zero.mad.action %in% c(  "na", "warn and na")){
+         if (left.mad  == 0) left.mad  <- NA
+         if (right.mad == 0) right.mad <- NA
+      }
+   }
+   return(c(left.mad, right.mad))
+}
+
+DoubleMADsFromMedian <- function(x, zero.mad.action="warn"){
+   # The zero.mad.action determines the action in the event of an MAD of zero.
+   # Possible values: "stop", "warn", "na" and "warn and na".
+   two.sided.mad <- DoubleMAD(x, zero.mad.action)
+   m <- median(x, na.rm=TRUE)
+   x.mad <- rep(two.sided.mad[1], length(x))
+   x.mad[x > m] <- two.sided.mad[2]
+   mad.distance <- abs(x - m) / x.mad
+   mad.distance[x==m] <- 0
+   return(mad.distance)
+}
+
+#outlier=print(x[DoubleMADsFromMedian(x) > 3])
+
+
+```
+
+
+```{r}
+#manual outlier removal
+mad_outlier_manual <- function(x, b = b_val, threshold = 3, replace_na = FALSE) {
+
+  med_x <- median(x, na.rm = TRUE)
+  mad_x <- mad(x, constant = b)  # customized scale factor
+  # Modified z-score
+  z_mad <- (x - med_x) / (mad_x)
+  
+  # Identify outliers
+  outlier_flag <- abs(z_mad) > threshold
+  return(x[outlier_flag])
+}
+```
+
+```{r}
+mad_outlier_manual_asymmetric <- function(x, b = b_val, threshold = 3, replace_na = FALSE) {
+  med_x <- median(x, na.rm = TRUE)
+  
+  # Separate values for left and right tails
+  left_vals  <- x[x < med_x]
+  right_vals <- x[x > med_x]
+  
+  # Compute MAD for each tail
+  mad_left  <- if(length(left_vals)  > 0) median(abs(left_vals  - med_x)) else .Machine$double.eps
+  mad_right <- if(length(right_vals) > 0) median(abs(right_vals - med_x)) else .Machine$double.eps
+  
+  # Modified z-scores
+  z_mad <- numeric(length(x))
+  z_mad[x < med_x]  <- (med_x - x[x < med_x]) / (b * mad_left)
+  z_mad[x > med_x]  <- (x[x > med_x] - med_x) / (b * mad_right)
+  z_mad[x == med_x] <- 0
+  
+  # Identify outliers
+  outlier_flag <- abs(z_mad) > threshold
+  
+  if (replace_na) {
+    x[outlier_flag] <- NA
+    return(x)
+  } else {
+    return(x[outlier_flag])
+  }
+}
+
+```
+
+#pooled data ce outlier
+
+##MLU
+```{r}
+
+lab.mlu <- (read.csv("Processed Data/Level1_output/labonly_MLU.csv"))[,-1]
+seg.mlu <- (read.csv("Processed Data/Level1_output/segonly_MLU.csv"))[,-1]
+count.mlu <- (read.csv("Processed Data/Level1_output/countonly_MLU.csv"))[,-1]
+names(count.mlu)[2]="SegNum_ave"
+
+```
+
+```{r}
+shapiro.test(lab.mlu$MLU_ave)#normal
+a=outliers_mad(lab.mlu$MLU_ave,b=1.4826, threshold=3, na.rm=TRUE)
+a$outliers_pos#1 outlier
+
+metric_name="MLU_ave"
+df=lab.mlu
+outlier=data.frame(
+  subjectID=df[a$outliers_pos,'subjectID'],
+  condition=df[a$outliers_pos,'condition'],
+  metric=rep(metric_name,length(a$outliers_pos)),
+  outlier_value=unname(df[a$outliers_pos,metric_name,drop=TRUE]))
+outlier_log <- rbind(outlier_log, outlier)
+
+lab.mlu[a$outliers_pos,'MLU_ave']<-NA
+
+
+shapiro.test(seg.mlu$MLU_ave)#normal
+a=outliers_mad(seg.mlu$MLU_ave,b=1.4826, threshold=3, na.rm=TRUE)
+a$outliers_pos#1 outlier
+
+metric_name="MLU_ave"
+df=seg.mlu
+outlier=data.frame(
+  subjectID=df[a$outliers_pos,'subjectID'],
+  condition=df[a$outliers_pos,'condition'],
+  metric=rep(metric_name,length(a$outliers_pos)),
+  outlier_value=unname(df[a$outliers_pos,metric_name,drop=TRUE]))
+outlier_log <- rbind(outlier_log, outlier)
+
+seg.mlu[a$outliers_pos,'MLU_ave']<-NA
+
+
+shapiro.test(count.mlu$MLU_ave)#not normal
+symmetry.test(count.mlu$MLU_ave) #not symmetric
+result <- count.mlu$MLU_ave[DoubleMADsFromMedian(count.mlu$MLU_ave) > 3] #4 outliers,all from low end
+
+metric_name="MLU_ave"
+df=count.mlu
+result_pos=which(count.mlu$MLU_ave %in% result)
+outlier=data.frame( 
+  subjectID=df[result_pos,'subjectID'],
+  condition=df[result_pos,'condition'],
+  metric=rep(metric_name,length(result_pos)),
+  outlier_value=unname(df[result_pos,metric_name,drop=TRUE]))
+outlier_log <- rbind(outlier_log, outlier)
+
+count.mlu$MLU_ave[count.mlu$MLU_ave %in% result] <- NA
+
+```
+
+```{r}
+full.mlu <- rbind(lab.mlu, seg.mlu, count.mlu)
+write.csv(full.mlu,"Processed Data/Level2_output/mlu_outremoved.csv")
+```
+
+
+```{r}
+full.sdt.agg.all=read.csv("Processed Data/Level1_output/full_SDT_agg_metrics.csv")
+full.sdt.agg.v.ll=read.csv("Processed Data/Level1_output/full_LL_SDT_byvideo_metrics.csv")
+full.sdt.agg.v.ll[sapply(full.sdt.agg.v.ll, is.infinite)] <- NA
+
+
+full.sdt.agg.all=full.sdt.agg.all[,-1]
+full.sdt.agg.v.ll=full.sdt.agg.v.ll[,-1]
+```
+
+##outlier log
+```{r}
+outlier_log <- data.frame(
+  subjectID = character(),
+  condition = character(),
+  metric = character(),
+  outlier_value = numeric(),
+  stringsAsFactors = FALSE
+)
+
+# metric_name="metric_name"
+# df="df"
+# result_pos=which(df$metric_name %in% result)
+# outlier=data.frame( 
+#   subjectID=df[result_pos,'subjectID'],
+#   condition=df[result_pos,'condition'],
+#   metric=rep(metric_name,length(result_pos)),
+#   outlier_value=unname(df[result_pos,metric_name,drop=TRUE]))
+# outlier_log <- rbind(outlier_log, outlier)
+# 
+# metric_name="metric_name"
+# df="df"
+# outlier=data.frame( 
+#   subjectID=df[a$outliers_pos,'subjectID'],
+#   condition=df[a$outliers_pos,'condition'],
+#   metric=rep(metric_name,length(a$outliers_pos)),
+#   outlier_value=unname(df[a$outliers_pos,metric_name,drop=TRUE]))
+# outlier_log <- rbind(outlier_log, outlier)
+
+```
+
+
+##sdt
+```{r}
+full.lab=full.sdt.agg.all %>% filter(condition=="WithLabel")
+full.seg=full.sdt.agg.all %>% filter(condition=="NoLabel")
+full.count=full.sdt.agg.all %>% filter(condition=="Counting")
+
+
+shapiro.test(full.lab$dprime)#normal
+a=outliers_mad(full.lab$dprime,b=1.4826, threshold=3, na.rm=TRUE)
+a$outliers_pos#no outlier
+
+shapiro.test(full.lab$c)#normal
+a=outliers_mad(full.lab$c,b=1.4826, threshold=3, na.rm=TRUE)
+a$outliers_pos#1 outlier
+
+metric_name="c"
+df=full.lab
+outlier=data.frame(
+  subjectID=df[a$outliers_pos,'Participant'],
+  condition=df[a$outliers_pos,'condition'],
+  metric=rep(metric_name,length(a$outliers_pos)),
+  outlier_value=unname(df[a$outliers_pos,metric_name,drop=TRUE]))
+outlier_log <- rbind(outlier_log, outlier)
+
+full.lab[a$outliers_pos,'c']<-NA
+
+
+shapiro.test(full.seg$dprime)#normal
+a=outliers_mad(full.seg$dprime,b=1.4826, threshold=3, na.rm=TRUE)
+a$outliers_pos#no outlier
+
+shapiro.test(full.seg$c)#normal
+a=outliers_mad(full.seg$c,b=1.4826, threshold=3, na.rm=TRUE)
+a$outliers_pos#no outlier
+
+shapiro.test(full.count$dprime)#normal
+a=outliers_mad(full.count$dprime,b=1.4826, threshold=3, na.rm=TRUE)
+a$outliers_pos#no outlier
+
+shapiro.test(full.count$c)#normal
+a=outliers_mad(full.count$c,b=1.4826, threshold=3, na.rm=TRUE)
+a$outliers_pos#no outlier
+```
+
+```{r}
+full.sdt=rbind(full.lab,full.seg,full.count)
+
+write.csv(full.sdt,"Processed Data/Level2_output/full_SDT_outlierremoved.csv")
+```
+
+
+##cea
+```{r}
+
+full.cea=read.csv("Processed Data/Level1_output/full_CEA.csv")
+full.cea.ave <- full.cea %>%
+  dplyr::select(video,subjectID,CEA,condition) %>%
+  group_by(subjectID) %>%
+  dplyr::summarize(CEA_ave=mean(CEA)) 
+cond=unique(full.cea %>% dplyr::select(subjectID,condition))
+full.cea.ave <- left_join(full.cea.ave,cond)
+```
+
+```{r}
+full.lab.cea=full.cea.ave %>% filter(condition=="WithLabel")
+full.seg.cea=full.cea.ave %>% filter(condition=="NoLabel")
+full.count.cea=full.cea.ave %>% filter(condition=="Counting")
+
+shapiro.test(full.lab.cea$CEA_ave)#not normal
+symmetry.test(full.lab.cea$CEA_ave) #symmetric
+b_val=compute_b_value(full.lab.cea$CEA_ave)
+a=outliers_mad(full.lab.cea$CEA_ave,b=b_val, threshold=3, na.rm=TRUE)
+a$outliers_pos#1 outlier
+
+metric_name="CEA_ave"
+df=full.lab.cea
+outlier=data.frame(
+  subjectID=df[a$outliers_pos,'subjectID'],
+  condition=df[a$outliers_pos,'condition'],
+  metric=rep(metric_name,length(a$outliers_pos)),
+  outlier_value=unname(df[a$outliers_pos,metric_name,drop=TRUE]))
+outlier_log <- rbind(outlier_log, outlier)
+
+full.lab.cea[a$outliers_pos,'CEA_ave']<-NA
+
+shapiro.test(full.seg.cea$CEA_ave)#normal
+a=outliers_mad(full.seg.cea$CEA_ave,b=1.4826, threshold=3, na.rm=TRUE)
+a$outliers_pos#no outlier
+
+shapiro.test(full.count.cea$CEA_ave)#normal
+a=outliers_mad(full.count.cea$CEA_ave,b=1.4826, threshold=3, na.rm=TRUE)
+a$outliers_pos#no outlier
+```
+
+```{r}
+full.cea.clean=rbind(full.lab.cea,full.seg.cea,full.count.cea)
+
+write.csv(full.cea.clean,"Processed Data/Level2_output/full_CEA_outlierremoved.csv")
+```
+
+##accuracy
+```{r}
+full.acc=(read.csv("Processed Data/Level1_output/full_accuracy.csv"))[,-1]
+
+```
+
+```{r}
+shapiro.test(full.acc$accuracy)#not normal
+symmetry.test(full.acc$accuracy) #symmetric
+b_val=compute_b_value(full.acc$accuracy)
+a=outliers_mad(full.acc$accuracy,b=b_val, threshold=3, na.rm=TRUE)
+a$outliers #no outlier
+
+```
+
+```{r}
+write.csv(full.acc,"Processed Data/Level2_output/full_acc_outremoved.csv")
+```
+
+
+
+##optimal deviation
+```{r}
+full.optdev <- (read.csv("Processed Data/Level1_output/full_opt_metrics_byvideo.csv"))[,-1] 
+full.optdev[sapply(full.optdev, is.infinite)] <- NA
+names(full.optdev)[1]="subjectID"
+
+full.optdev <- full.optdev  %>%
+  dplyr::select(video,subjectID,c_deviation,condition) %>%
+  group_by(subjectID,condition) %>%
+  dplyr::summarize(ave.c.devi=mean(na.omit(c_deviation)))
+
+```
+
+```{r}
+full.lab.optdev=full.optdev %>% filter(condition=="WithLabel")
+full.seg.optdev=full.optdev %>% filter(condition=="NoLabel")
+full.count.optdev=full.optdev %>% filter(condition=="Counting")
+
+shapiro.test(full.lab.optdev$ave.c.devi)#normal
+a=outliers_mad(full.lab.optdev$ave.c.devi,b=1.4826, threshold=3, na.rm=TRUE)
+a$outliers_pos #1 outliers
+
+metric_name="ave.c.devi"
+df=full.lab.optdev
+outlier=data.frame(
+  subjectID=df[a$outliers_pos,'subjectID'],
+  condition=df[a$outliers_pos,'condition'],
+  metric=rep(metric_name,length(a$outliers_pos)),
+  outlier_value=unname(df[a$outliers_pos,metric_name,drop=TRUE]))
+outlier_log <- rbind(outlier_log, outlier)
+
+full.lab.optdev[a$outliers_pos,'ave.c.devi']<-NA
+
+
+shapiro.test(full.seg.optdev$ave.c.devi)#normal
+a=outliers_mad(full.seg.optdev$ave.c.devi,b=1.4826, threshold=3, na.rm=TRUE)
+a$outliers #no outliers
+
+shapiro.test(full.count.optdev$ave.c.devi)#not normal
+a=outliers_mad(full.count.optdev$ave.c.devi,b=1.4826, threshold=3, na.rm=TRUE)
+a$outliers_pos #3 outliers
+
+metric_name="ave.c.devi"
+df=full.count.optdev
+outlier=data.frame(
+  subjectID=df[a$outliers_pos,'subjectID'],
+  condition=df[a$outliers_pos,'condition'],
+  metric=rep(metric_name,length(a$outliers_pos)),
+  outlier_value=unname(df[a$outliers_pos,metric_name,drop=TRUE]))
+outlier_log <- rbind(outlier_log, outlier)
+
+full.count.optdev[a$outliers_pos,'ave.c.devi']<-NA
+
+```
+
+```{r}
+full.optdev <- rbind(full.lab.optdev,full.seg.optdev,full.count.optdev)
+
+write.csv(full.optdev,"Processed Data/Level2_output/full_optdev_outremoved.csv")
+```
+
+
+#individual diff
+
+```{r}
+
+steu.full=read.csv("Processed Data/Level0_output/deid_STEU_raw_new.csv")
+steu.full=steu.full[,-1]
+names(steu.full)[names(steu.full) == "STEW_score"] <- "STEU_score"
+a=which(steu.full$subjectID=="c45d21c852f2e495bec51684")
+steu.full=steu.full[-a,] #remove low-effort individual
+
+emo.verb.full=read.csv("Processed Data/Level1_output/full_emo_verb_fluency.csv")
+emo.verb.full=emo.verb.full[,-1]
+
+```
+
+
+
+##steu
+
+```{r}
+steu.lab=steu.full %>% filter(condition=="WithLabel")
+steu.seg=steu.full %>% filter(condition=="NoLabel")
+steu.count=steu.full %>% filter(condition=="Counting")
+
+#lab
+shapiro.test(steu.lab$STEU_score)#normal
+a=outliers_mad(steu.lab$STEU_score,b=1.4826, threshold=3, na.rm=TRUE)
+a$outliers_pos#no outlier
+
+shapiro.test(steu.lab$STEU_sub_score)#not normal
+symmetry.test(steu.lab$STEU_sub_score) #symmetric
+b_val=compute_b_value(steu.lab$STEU_sub_score)
+a=outliers_mad(steu.lab$STEU_sub_score,b=b_val, threshold=3, na.rm=TRUE)
+a$outliers_pos#no outlier
+
+shapiro.test(steu.lab$STEU_untrained)#not normal
+symmetry.test(steu.lab$STEU_untrained) #asymmetric
+result <- steu.seg$STEU_sub_score[DoubleMADsFromMedian(steu.seg$STEU_sub_score) > 3] 
+
+b_val=compute_b_value(steu.lab$STEU_untrained)
+a=outliers_mad(steu.lab$STEU_untrained,b=b_val, threshold=3, na.rm=TRUE)
+a$outliers_pos#no outliers
+
+#seg
+shapiro.test(steu.seg$STEU_score)#not normal
+symmetry.test(steu.seg$STEU_score) #symmetric
+b_val=compute_b_value(steu.seg$STEU_score)
+a=outliers_mad(steu.seg$STEU_score,b=b_val, threshold=3, na.rm=TRUE)
+a$outliers_pos#1 outlier
+
+metric_name="STEU_score"
+df=steu.seg
+outlier=data.frame( 
+  subjectID=df[a$outliers_pos,'subjectID'],
+  condition=df[a$outliers_pos,'condition'],
+  metric=rep(metric_name,length(a$outliers_pos)),
+  outlier_value=unname(df[a$outliers_pos,metric_name,drop=TRUE]))
+outlier_log <- rbind(outlier_log, outlier)
+
+steu.seg[a$outliers_pos,'STEU_score']<-NA
+
+shapiro.test(steu.seg$STEU_sub_score)#not normal
+symmetry.test(steu.seg$STEU_sub_score) #asymmetric
+result <- steu.seg$STEU_sub_score[DoubleMADsFromMedian(steu.seg$STEU_sub_score) > 3] 
+#warning: MAD=0, more than 50% of data on the right or left side of the median have identical values
+hist(steu.seg$STEU_sub_score) #median=0.625
+#using original
+b_val=compute_b_value(steu.seg$STEU_sub_score)
+a=outliers_mad(steu.seg$STEU_sub_score,b=b_val, threshold=3, na.rm=TRUE)
+a$outliers_pos#no outlier
+
+
+shapiro.test(steu.seg$STEU_untrained)#not normal
+symmetry.test(steu.seg$STEU_untrained) #asymmetric
+result <- steu.seg$STEU_untrained[DoubleMADsFromMedian(steu.seg$STEU_untrained) > 3] #2 outliers
+
+metric_name="STEU_untrained"
+df=steu.seg
+outlier=data.frame( 
+  subjectID=df[a$outliers_pos,'subjectID'],
+  condition=df[a$outliers_pos,'condition'],
+  metric=rep(metric_name,length(a$outliers_pos)),
+  outlier_value=unname(df[a$outliers_pos,metric_name,drop=TRUE]))
+outlier_log <- rbind(outlier_log, outlier)
+
+
+steu.seg$STEU_untrained[steu.seg$STEU_untrained %in% result] <- NA
+
+
+#count
+shapiro.test(steu.count$STEU_score)#not normal
+symmetry.test(steu.count$STEU_score) #symmetric
+b_val=compute_b_value(steu.count$STEU_score)
+a=outliers_mad(steu.count$STEU_score,b=b_val, threshold=3, na.rm=TRUE)
+a$outliers_pos#9
+#a=outliers_mad(steu.count$STEU_score,b=1.4826, threshold=3)
+#a$outliers_pos
+
+metric_name="STEU_score"
+df=steu.count
+outlier=data.frame( 
+  subjectID=df[a$outliers_pos,'subjectID'],
+  condition=df[a$outliers_pos,'condition'],
+  metric=rep(metric_name,length(a$outliers_pos)),
+  outlier_value=unname(df[a$outliers_pos,metric_name,drop=TRUE]))
+outlier_log <- rbind(outlier_log, outlier)
+
+
+steu.count[a$outliers_pos,'STEU_score']<-NA
+
+shapiro.test(steu.count$STEU_sub_score)#not normal
+symmetry.test(steu.count$STEU_sub_score) #symmetric
+b_val=compute_b_value(steu.count$STEU_sub_score)
+a=outliers_mad(steu.count$STEU_sub_score,b=b_val, threshold=3, na.rm=TRUE)
+a$outliers_pos#no outlier
+
+shapiro.test(steu.count$STEU_untrained)#not normal
+symmetry.test(steu.count$STEU_untrained) #symmetric
+b_val=compute_b_value(steu.count$STEU_untrained)
+a=outliers_mad(steu.count$STEU_untrained,b=b_val, threshold=3, na.rm=TRUE)
+a$outliers_pos#1 outliers
+
+metric_name="STEU_untrained"
+df=steu.count
+outlier=data.frame( 
+  subjectID=df[a$outliers_pos,'subjectID'],
+  condition=df[a$outliers_pos,'condition'],
+  metric=rep(metric_name,length(a$outliers_pos)),
+  outlier_value=unname(df[a$outliers_pos,metric_name,drop=TRUE]))
+outlier_log <- rbind(outlier_log, outlier)
+
+steu.count[a$outliers_pos,'STEU_untrained']<-NA
+```
+
+```{r}
+full.steu=rbind(steu.lab,steu.seg,steu.count)
+
+write.csv(full.steu,"Processed Data/Level2_output/steu_outremoved.csv")
+```
+
+##emo verb
+```{r}
+shapiro.test(emo.verb.full$total_unique_word)#not normal
+symmetry.test(emo.verb.full$total_unique_word) #symmetric
+b_val=compute_b_value(emo.verb.full$total_unique_word)
+a=outliers_mad(emo.verb.full$total_unique_word,b=b_val, threshold=3, na.rm=TRUE)
+a$outliers_pos#1 outliers
+
+metric_name="total_unique_word"
+df=emo.verb.full
+outlier=data.frame( 
+  subjectID=df[a$outliers_pos,'subjectID'],
+  condition=df[a$outliers_pos,'condition'],
+  metric=rep(metric_name,length(a$outliers_pos)),
+  outlier_value=unname(df[a$outliers_pos,metric_name,drop=TRUE]))
+outlier_log <- rbind(outlier_log, outlier)
+
+emo.verb.full[a$outliers_pos,'total_unique_word']<-NA
+
+shapiro.test(emo.verb.full$total_word)#not normal
+symmetry.test(emo.verb.full$total_word) #asymmetric
+result <- emo.verb.full$total_word[DoubleMADsFromMedian(emo.verb.full$total_word) > 3] #13 outliers from both ends
+#b_val=compute_b_value(emo.verb.full$total_word)
+#a=outliers_mad(emo.verb.full$total_word,b=b_val, threshold=3, na.rm=TRUE)
+#a$outliers
+
+metric_name="total_word"
+df=emo.verb.full
+result_pos=which(emo.verb.full$total_word %in% result)
+outlier=data.frame( 
+  subjectID=df[result_pos,'subjectID'],
+  condition=df[result_pos,'condition'],
+  metric=rep(metric_name,length(result_pos)),
+  outlier_value=unname(df[result_pos,metric_name,drop=TRUE]))
+outlier_log <- rbind(outlier_log, outlier)
+
+emo.verb.full$total_word[emo.verb.full$total_word %in% result] <- NA
+
+```
+
+```{r}
+write.csv(emo.verb.full,"Processed Data/Level2_output/emo_verb_outremoved.csv")
+```
+
+
+
+
+
+
+```{r}
+write.csv(outlier_log,"Processed Data/Level2_output/full_outlier_log.csv")
+```
+
+
+
+
+
+#power analysis for replication
+```{r}
+library(pwr)
+#power analysis for sample size needed to achieve the CEA-STEU correlation based on prior study
+pwr.r.test(r=0.26, sig.level = 0.05, power = 0.8, alternative = "greater")
+#n=89 (total n ~ 190-200)
+
+
+#power analysis for sample size needed to achieve the label/no-label distinction of sensitivity and criterion (based on CE constructed using the current full sample)
+pwr.t.test(d=0.733,power=0.8,sig.level=0.05,type="two.sample",alternative="greater")
+#n=24 per group
+
+pwr.t.test(d=0.95,power=0.8,sig.level=0.05,type="two.sample",alternative="greater")
+#n=14 per group
+
+#with a third condition
+library(pwr)
+pwr.anova.test(k=3,f=0.733/sqrt(2),sig.level=0.05,power=0.8)
+
+```
+
+
+#within cell outliers
+
+##outlier log
+
+```{r}
+outlier_log <- data.frame(
+  subjectID = character(),
+  condition = character(),
+  metric = character(),
+  outlier_value = numeric(),
+  stringsAsFactors = FALSE
+)
+
+metric_name="metric_name"
+df="df"
+result_pos=which(df$metric_name %in% result)
+outlier=data.frame( 
+  subjectID=df[result_pos,'subjectID'],
+  condition=df[result_pos,'condition'],
+  metric=rep(metric_name,length(result_pos)),
+  outlier_value=unname(df[result_pos,metric_name,drop=TRUE]))
+outlier_log <- rbind(outlier_log, outlier)
+
+metric_name="metric_name"
+df="df"
+outlier=data.frame( 
+  subjectID=df[a$outliers_pos,'subjectID'],
+  condition=df[a$outliers_pos,'condition'],
+  metric=rep(metric_name,length(a$outliers_pos)),
+  outlier_value=unname(df[a$outliers_pos,metric_name,drop=TRUE]))
+outlier_log <- rbind(outlier_log, outlier)
+
+```
+
+##cea
+```{r}
+
+lab.cea=read.csv("Processed Data/Level1_output/LAB_CEA.csv")
+lab.cea.ave <- lab.cea %>%
+  dplyr::select(video,subjectID,CEA,condition) %>%
+  group_by(subjectID) %>%
+  dplyr::summarize(CEA_ave=mean(CEA)) 
+cond=unique(lab.cea %>% dplyr::select(subjectID,condition))
+lab.cea.ave <- left_join(lab.cea.ave,cond)
+
+
+seg.cea=read.csv("Processed Data/Level1_output/SEG_CEA.csv")
+seg.cea.ave <- seg.cea %>%
+  dplyr::select(video,subjectID,CEA,condition) %>%
+  group_by(subjectID) %>%
+  dplyr::summarize(CEA_ave=mean(CEA)) 
+cond=unique(seg.cea %>% dplyr::select(subjectID,condition))
+seg.cea.ave <- left_join(seg.cea.ave,cond)
+
+count.cea=read.csv("Processed Data/Level1_output/COUNT_CEA.csv")
+count.cea.ave <- count.cea %>%
+  dplyr::select(video,subjectID,CEA,condition) %>%
+  group_by(subjectID) %>%
+  dplyr::summarize(CEA_ave=mean(CEA)) 
+cond=unique(count.cea %>% dplyr::select(subjectID,condition))
+count.cea.ave <- left_join(count.cea.ave,cond)
+```
+
+```{r}
+full.lab.cea=lab.cea.ave 
+full.seg.cea=seg.cea.ave
+full.count.cea=count.cea.ave
+```
+
+```{r}
+
+
+shapiro.test(full.lab.cea$CEA_ave)#normal
+a=outliers_mad(full.lab.cea$CEA_ave,b=1.4826, threshold=3, na.rm=TRUE)
+a$outliers_pos#0 outlier
+
+shapiro.test(full.seg.cea$CEA_ave)#normal
+a=outliers_mad(full.seg.cea$CEA_ave,b=1.4826, threshold=3, na.rm=TRUE)
+a$outliers_pos#no outlier
+
+shapiro.test(full.count.cea$CEA_ave)#normal
+a=outliers_mad(full.count.cea$CEA_ave,b=1.4826, threshold=3, na.rm=TRUE)
+a$outliers_pos#no outlier
+
+```
+
+```{r}
+full.cea=rbind(full.lab.cea,full.seg.cea,full.count.cea)
+write.csv(full.cea,"Processed Data/Level2_output/within_CEA_outlierremoved.csv")
+```
+
+##sdt
+```{r}
+lab.sdt.agg.all=read.csv("Processed Data/Level1_output/LAB_SDT_agg_metrics.csv")
+lab.sdt.agg.all=lab.sdt.agg.all[,-1]
+
+seg.sdt.agg.all=read.csv("Processed Data/Level1_output/SEG_SDT_agg_metrics.csv")
+seg.sdt.agg.all=seg.sdt.agg.all[,-1]
+
+count.sdt.agg.all=read.csv("Processed Data/Level1_output/COUNT_SDT_agg_metrics.csv")
+count.sdt.agg.all=count.sdt.agg.all[,-1]
+```
+
+```{r}
+full.lab=lab.sdt.agg.all
+full.seg=seg.sdt.agg.all
+full.count=count.sdt.agg.all
+```
+
+```{r}
+shapiro.test(full.lab$dprime)#normal
+a=outliers_mad(full.lab$dprime,b=1.4826, threshold=3, na.rm=TRUE)
+a$outliers_pos#no outlier
+
+shapiro.test(full.lab$c)#normal
+a=outliers_mad(full.lab$c,b=1.4826, threshold=3, na.rm=TRUE)
+a$outliers_pos#0 outlier
+
+
+shapiro.test(full.seg$dprime)#normal
+a=outliers_mad(full.seg$dprime,b=1.4826, threshold=3, na.rm=TRUE)
+a$outliers_pos#0 outlier
+
+
+shapiro.test(full.seg$c)#normal
+a=outliers_mad(full.seg$c,b=1.4826, threshold=3, na.rm=TRUE)
+a$outliers_pos#no outlier
+
+
+
+shapiro.test(full.count$dprime)#normal
+a=outliers_mad(full.count$dprime,b=1.4826, threshold=3, na.rm=TRUE)
+a$outliers_pos#1 outlier
+
+metric_name="dprime"
+df=full.count
+outlier=data.frame( 
+  subjectID=df[a$outliers_pos,'Participant'],
+  condition=df[a$outliers_pos,'condition'],
+  metric=rep(metric_name,length(a$outliers_pos)),
+  outlier_value=unname(df[a$outliers_pos,metric_name,drop=TRUE]))
+outlier_log <- rbind(outlier_log, outlier)
+
+full.count[a$outliers_pos,'dprime']<-NA
+
+
+shapiro.test(full.count$c)#normal
+a=outliers_mad(full.count$c,b=1.4826, threshold=3, na.rm=TRUE)
+a$outliers_pos#no outlier
+```
+
+```{r}
+full.all=rbind(full.lab,full.seg,full.count)
+```
+
+```{r}
+write.csv(full.all,"Processed Data/Level2_output/within_SDT_outlierremoved.csv")
+
+```
+
+
+
+
+##accuracy
+```{r}
+lab.acc=(read.csv("Processed Data/Level1_output/lab_accuracy.csv"))[,-1]
+lab.acc$condition="WithLabel"
+
+seg.acc=(read.csv("Processed Data/Level1_output/seg_accuracy.csv"))[,-1]
+seg.acc$condition="NoLabel"
+
+count.acc=(read.csv("Processed Data/Level1_output/count_accuracy.csv"))[,-1]
+count.acc$condition="Counting"
+
+```
+
+```{r}
+shapiro.test(lab.acc$accuracy)#normal
+a=outliers_mad(lab.acc$accuracy,b=1.4826, threshold=3, na.rm=TRUE)
+a$outliers #no outlier
+
+shapiro.test(seg.acc$accuracy)#normal
+a=outliers_mad(seg.acc$accuracy,b=1.4826, threshold=3, na.rm=TRUE)
+a$outliers #no outlier
+
+shapiro.test(count.acc$accuracy)#not normal
+symmetry.test(count.acc$accuracy) #symmetric
+b_val=compute_b_value(count.acc$accuracy)
+a=outliers_mad(count.acc$accuracy,b=b_val, threshold=3, na.rm=TRUE)
+a$outliers #2 outlier
+
+
+metric_name="accuracy"
+df=count.acc
+outlier=data.frame( 
+  subjectID=df[a$outliers_pos,'Participant'],
+  condition=df[a$outliers_pos,'condition'],
+  metric=rep(metric_name,length(a$outliers_pos)),
+  outlier_value=unname(df[a$outliers_pos,metric_name,drop=TRUE]))
+outlier_log <- rbind(outlier_log, outlier)
+
+
+count.acc$accuracy[count.acc$accuracy %in% a$outliers] <- NA
+
+```
+
+```{r}
+full.acc <-rbind(lab.acc,seg.acc,count.acc)
+write.csv(full.acc,"Processed Data/Level2_output/within_acc_outremoved.csv")
+```
+
+
+
+
+
+##optimal deviation
+```{r}
+lab.optdev <- (read.csv("Processed Data/Level1_output/lab_opt_metrics_byvideo.csv"))[,-1] 
+lab.optdev[sapply(lab.optdev, is.infinite)] <- NA
+names(lab.optdev)[1]="subjectID"
+
+lab.optdev <- lab.optdev  %>%
+  dplyr::select(video,subjectID,c_deviation,condition) %>%
+  group_by(subjectID) %>%
+  dplyr::summarize(ave.c.devi=mean(na.omit(c_deviation))) %>%
+  mutate(condition="WithLabel")
+
+seg.optdev <- (read.csv("Processed Data/Level1_output/seg_opt_metrics_byvideo.csv"))[,-1] 
+seg.optdev[sapply(seg.optdev, is.infinite)] <- NA
+names(seg.optdev)[1]="subjectID"
+
+seg.optdev <- seg.optdev  %>%
+  dplyr::select(video,subjectID,c_deviation,condition) %>%
+  group_by(subjectID) %>%
+  dplyr::summarize(ave.c.devi=mean(na.omit(c_deviation))) %>%
+  mutate(condition="NoLabel")
+
+count.optdev <- (read.csv("Processed Data/Level1_output/count_opt_metrics_byvideo.csv"))[,-1] 
+count.optdev[sapply(count.optdev, is.infinite)] <- NA
+names(count.optdev)[1]="subjectID"
+
+count.optdev <- count.optdev  %>%
+  dplyr::select(video,subjectID,c_deviation,condition) %>%
+  group_by(subjectID) %>%
+  dplyr::summarize(ave.c.devi=mean(na.omit(c_deviation))) %>%
+  mutate(condition="Counting")
+```
+
+```{r}
+shapiro.test(lab.optdev$ave.c.devi)#normal
+a=outliers_mad(lab.optdev$ave.c.devi,b=1.4826, threshold=3, na.rm=TRUE)
+a$outliers #no outliers
+
+shapiro.test(seg.optdev$ave.c.devi)#normal
+a=outliers_mad(seg.optdev$ave.c.devi,b=1.4826, threshold=3, na.rm=TRUE)
+a$outliers #no outliers
+
+shapiro.test(count.optdev$ave.c.devi)#not normal
+symmetry.test(count.optdev$ave.c.devi) #asymmetric
+result <- count.optdev$ave.c.devi[DoubleMADsFromMedian(count.optdev$ave.c.devi) > 3] #3 from both ends
+
+metric_name="ave.c.devi"
+df=count.optdev
+result_pos=which(count.optdev$ave.c.devi %in% result)
+outlier=data.frame( 
+  subjectID=df[result_pos,'subjectID'],
+  condition=df[result_pos,'condition'],
+  metric=rep(metric_name,length(result_pos)),
+  outlier_value=unname(df[result_pos,metric_name,drop=TRUE]))
+outlier_log <- rbind(outlier_log, outlier)
+
+
+count.optdev$ave.c.devi[count.optdev$ave.c.devi %in% result] <- NA
+```
+
+```{r}
+full.optdev <- rbind(lab.optdev,seg.optdev,count.optdev)
+
+write.csv(full.optdev,"Processed Data/Level2_output/within_optdev_outremoved.csv")
+```
+
+```{r}
+write.csv(outlier_log,"Processed Data/Level2_output/within_outlier_log.csv")
+```
+

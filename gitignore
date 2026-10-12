@@ -1,0 +1,16 @@
+# Excluded from the public repository
+
+Data/Raw Data/
+Manuscript Writing/
+Presentations and Abstracts/
+Receipts/
+
+# R / RStudio
+.Rproj.user/
+.Rhistory
+.Rapp.history
+.RData
+.Ruserdata
+
+# knitted output
+*.html

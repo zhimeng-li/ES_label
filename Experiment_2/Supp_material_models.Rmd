@@ -1,0 +1,595 @@
+---
+title: "supp_models"
+author: "Zhimeng Li"
+date: "2026-06-07"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#Load packages
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+list.of.packages = c("base","spearmanCI","tidyr", "readr","dplyr", "ggplot2","psych" , "ggpubr","stats","rstatix", "pwr","Hmisc","ggfortify","apaTables","kableExtra", "Routliers","viridis","stringr","data.table","interactions","effectsize","flextable","officer","tidyverse","car","patchwork","ggsignif")
+
+
+new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
+if(length(new.packages) > 0) {install.packages(new.packages)}
+lapply(list.of.packages, require, character.only=T)
+```
+
+
+#pooled data CEs
+
+##load data
+```{r}
+full.sdt=(read.csv("Processed Data/Level2_output/full_SDT_outlierremoved.csv"))[,-1]
+full.sdt <- full.sdt %>%
+  dplyr::select("Participant","dprime","c","condition")
+names(full.sdt)[1]="subjectID"
+
+full.cea=(read.csv("Processed Data/Level2_output/full_CEA_outlierremoved.csv"))[,-1]
+
+full.acc=(read.csv("Processed Data/Level2_output/full_acc_outremoved.csv"))[,-1]
+names(full.acc)[1]="subjectID"
+cond=full.cea %>% dplyr::select(subjectID,condition)
+full.acc=left_join(full.acc,cond)
+
+full.optdev=(read.csv("Processed Data/Level2_output/full_optdev_outremoved.csv"))[,-1]
+
+all.mlu=(read.csv("Processed Data/Level2_output/mlu_outremoved.csv"))[,-1]
+all.steu=(read.csv("Processed Data/Level2_output/steu_outremoved.csv"))[,-1]
+all.steu=all.steu %>% dplyr::select(subjectID,condition,STEU_score,STEU_sub_score,STEU_untrained)
+all.emo.verb=(read.csv("Processed Data/Level2_output/emo_verb_outremoved.csv"))[,-1]
+
+
+
+```
+
+```{r}
+all=full_join(full.cea,full.acc,by=c("subjectID","condition"))
+all=full_join(all,full.sdt,by=c("subjectID","condition"))
+all=full_join(all,full.optdev,by=c("subjectID","condition"))
+all=full_join(all,all.steu,by=c("subjectID","condition"))
+all=full_join(all,all.emo.verb,by=c("subjectID","condition"))
+all=full_join(all,all.mlu,by=c("subjectID","condition"))
+
+```
+
+
+
+# semantic - emoseg metric relationship across whole sample
+
+##STEU/word-emo seg across conditions
+###STEU
+```{r}
+model=lm(CEA_ave~STEU_score,data=all)
+summary(model)
+```
+
+```{r}
+model=lm(CEA_ave~STEU_sub_score,data=all)
+summary(model)
+```
+
+```{r}
+model=lm(CEA_ave~STEU_untrained,data=all)
+summary(model)
+```
+
+```{r}
+model=lm(dprime~STEU_score,data=all)
+summary(model)
+```
+
+```{r}
+model=lm(dprime~STEU_sub_score,data=all)
+summary(model)
+```
+
+```{r}
+model=lm(dprime~STEU_untrained,data=all)
+summary(model)
+```
+
+```{r}
+model=lm(accuracy~STEU_score,data=all)
+summary(model)
+```
+
+```{r}
+model=lm(accuracy~STEU_sub_score,data=all)
+summary(model)
+```
+
+```{r}
+model=lm(accuracy~STEU_untrained,data=all)
+summary(model)
+```
+
+###fluency
+```{r}
+model=lm(CEA_ave~total_unique_word,data=all)
+summary(model)
+#significant: higher total unique word higher CEA (b=0.004, p=0.0066)
+```
+
+```{r}
+model=lm(CEA_ave~total_word,data=all)
+summary(model)
+```
+
+```{r}
+model=lm(dprime~total_unique_word,data=all)
+summary(model)
+```
+
+```{r}
+model=lm(dprime~total_word,data=all)
+summary(model)
+```
+
+```{r}
+model=lm(accuracy~total_unique_word,data=all)
+summary(model)
+```
+
+```{r}
+model=lm(accuracy~total_word,data=all)
+summary(model)
+```
+
+```{r}
+model=lm(SegNum_ave~total_unique_word,data=all)
+summary(model)
+```
+
+```{r}
+model=lm(SegNum_ave~total_word,data=all)
+summary(model)
+```
+
+```{r}
+model=lm(MLU_ave~total_unique_word,data=all)
+summary(model)
+```
+
+```{r}
+model=lm(MLU_ave~total_word,data=all)
+summary(model)
+```
+
+
+##Whether condition effect of emoseg preserve controlling for STEU & emo word
+####STEU
+```{r}
+
+model=lm(CEA_ave~condition+STEU_score,data=all)
+summary(model)
+
+library(car)
+Anova(model,type=2)
+```
+
+```{r}
+
+model=lm(dprime~condition+STEU_score,data=all)
+summary(model)
+
+Anova(model,type=2)
+```
+
+```{r}
+
+model=lm(accuracy~condition+STEU_score,data=all)
+summary(model)
+
+Anova(model,type=2)
+```
+
+```{r}
+
+model=lm(CEA_ave~condition+STEU_sub_score,data=all)
+summary(model)
+
+Anova(model,type=2)
+```
+
+```{r}
+
+model=lm(dprime~condition+STEU_sub_score,data=all)
+summary(model)
+
+Anova(model,type=2)
+```
+
+```{r}
+
+model=lm(accuracy~condition+STEU_sub_score,data=all)
+summary(model)
+
+Anova(model,type=2)
+```
+
+```{r}
+
+model=lm(CEA_ave~condition+STEU_untrained,data=all)
+summary(model)
+
+Anova(model,type=2)
+```
+
+```{r}
+
+model=lm(dprime~condition+STEU_untrained,data=all)
+summary(model)
+
+Anova(model,type=2)
+```
+
+```{r}
+
+model=lm(accuracy~condition+STEU_untrained,data=all)
+summary(model)
+
+Anova(model,type=2)
+```
+
+###fluency
+```{r}
+
+model=lm(CEA_ave~total_unique_word+condition,data=all)
+summary(model)
+
+Anova(model,type=2)
+```
+
+```{r}
+
+model=lm(dprime~condition+total_unique_word,data=all)
+summary(model)
+
+Anova(model,type=2)
+```
+
+```{r}
+
+model=lm(accuracy~condition+total_unique_word,data=all)
+summary(model)
+
+Anova(model,type=2)
+```
+
+```{r}
+
+model=lm(SegNum_ave~condition+total_unique_word,data=all)
+summary(model)
+
+Anova(model,type=2)
+```
+
+```{r}
+
+model=lm(MLU_ave~condition+total_unique_word,data=all)
+summary(model)
+
+Anova(model,type=2)
+```
+
+
+
+```{r}
+
+model=lm(CEA_ave~total_word+condition,data=all)
+summary(model)
+
+Anova(model,type=2)
+```
+
+```{r}
+
+model=lm(dprime~condition+total_word,data=all)
+summary(model)
+
+Anova(model,type=2)
+```
+
+```{r}
+
+model=lm(accuracy~condition+total_word,data=all)
+summary(model)
+
+Anova(model,type=2)
+```
+
+```{r}
+
+model=lm(SegNum_ave~condition+total_word,data=all)
+summary(model)
+
+Anova(model,type=2)
+```
+
+```{r}
+
+model=lm(MLU_ave~condition+total_word,data=all)
+summary(model)
+
+Anova(model,type=2)
+```
+
+
+##Whether STEU-emoseg link vary across conditions?
+###CEA
+```{r,echo=FALSE}
+model=lm(CEA_ave~STEU_score*condition,data=all) #
+summary(model)
+```
+
+
+```{r}
+sim_slopes(
+  model,
+  STEU_score,
+  condition,
+  modx.values = NULL,
+  centered = "all",
+  cond.int = TRUE,
+  confint=TRUE
+)
+```
+
+```{r,echo=FALSE}
+model=lm(CEA_ave~STEU_sub_score*condition,data=all) 
+summary(model)
+```
+
+```{r}
+sim_slopes(
+  model,
+  STEU_sub_score,
+  condition,
+  modx.values = NULL,
+  centered = "all",
+  cond.int = TRUE,
+  confint=TRUE
+)
+```
+
+```{r,echo=FALSE}
+model=lm(CEA_ave~STEU_untrained*condition,data=all)
+summary(model)
+```
+
+```{r}
+sim_slopes(
+  model,
+  STEU_untrained,
+  condition,
+  modx.values = NULL,
+  centered = "all",
+  cond.int = TRUE,
+  confint=TRUE
+)
+```
+
+```{r,echo=FALSE}
+
+model=lm(CEA_ave~total_unique_word*condition,data=all)
+summary(model)
+```
+
+```{r}
+sim_slopes(
+  model,
+  total_unique_word,
+  condition,
+  modx.values = NULL,
+  centered = "all",
+  cond.int = TRUE,
+  confint=TRUE
+)
+```
+
+```{r,echo=FALSE}
+
+model=lm(CEA_ave~total_word*condition,data=all)
+summary(model)
+```
+
+```{r}
+sim_slopes(
+  model,
+  total_word,
+  condition,
+  modx.values = NULL,
+  centered = "all",
+  cond.int = TRUE,
+  confint=TRUE
+)
+```
+
+
+
+
+###accuracy
+```{r,echo=FALSE}
+model=lm(accuracy~STEU_score*condition,data=all) #
+summary(model)
+```
+
+```{r}
+sim_slopes(
+  model,
+  STEU_score,
+  condition,
+  modx.values = NULL,
+  centered = "all",
+  cond.int = TRUE,
+  confint=TRUE
+)
+```
+
+```{r,echo=FALSE}
+model=lm(accuracy~STEU_sub_score*condition,data=all) 
+summary(model)
+```
+
+```{r}
+sim_slopes(
+  model,
+  STEU_sub_score,
+  condition,
+  modx.values = NULL,
+  centered = "all",
+  cond.int = TRUE,
+  confint=TRUE
+)
+```
+
+```{r,echo=FALSE}
+model=lm(accuracy~STEU_untrained*condition,data=all)
+summary(model)
+```
+
+```{r}
+sim_slopes(
+  model,
+  STEU_untrained,
+  condition,
+  modx.values = NULL,
+  centered = "all",
+  cond.int = TRUE,
+  confint=TRUE
+)
+```
+
+```{r,echo=FALSE}
+
+model=lm(accuracy~total_unique_word*condition,data=all)
+summary(model)
+```
+
+```{r}
+sim_slopes(
+  model,
+  total_unique_word,
+  condition,
+  modx.values = NULL,
+  centered = "all",
+  cond.int = TRUE,
+  confint=TRUE
+)
+```
+
+```{r,echo=FALSE}
+
+model=lm(accuracy~total_word*condition,data=all)
+summary(model)
+```
+
+```{r}
+sim_slopes(
+  model,
+  total_word,
+  condition,
+  modx.values = NULL,
+  centered = "all",
+  cond.int = TRUE,
+  confint=TRUE
+)
+```
+
+###dprime
+
+```{r,echo=FALSE}
+model=lm(dprime~STEU_score*condition,data=all) #
+summary(model)
+```
+
+```{r}
+sim_slopes(
+  model,
+  STEU_score,
+  condition,
+  modx.values = NULL,
+  centered = "all",
+  cond.int = TRUE,
+  confint=TRUE
+)
+```
+
+
+```{r,echo=FALSE}
+model=lm(dprime~STEU_sub_score*condition,data=all) 
+summary(model)
+confint(model)
+```
+
+```{r}
+sim_slopes(
+  model,
+  STEU_sub_score,
+  condition,
+  modx.values = NULL,
+  centered = "all",
+  cond.int = TRUE,
+  confint=TRUE
+)
+```
+
+
+```{r,echo=FALSE}
+model=lm(dprime~STEU_untrained*condition,data=all)
+summary(model)
+```
+
+```{r}
+sim_slopes(
+  model,
+  STEU_untrained,
+  condition,
+  modx.values = NULL,
+  centered = "all",
+  cond.int = TRUE,
+  confint=TRUE
+)
+```
+
+
+```{r,echo=FALSE}
+
+model=lm(dprime~total_unique_word*condition,data=all)
+summary(model)
+```
+
+```{r}
+sim_slopes(
+  model,
+  total_unique_word,
+  condition,
+  modx.values = NULL,
+  centered = "all",
+  cond.int = TRUE,
+  confint=TRUE
+)
+```
+
+```{r,echo=FALSE}
+
+model=lm(dprime~total_word*condition,data=all)
+summary(model)
+```
+
+```{r}
+sim_slopes(
+  model,
+  total_word,
+  condition,
+  modx.values = NULL,
+  centered = "all",
+  cond.int = TRUE,
+  confint=TRUE
+)
+```

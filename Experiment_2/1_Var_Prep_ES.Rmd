@@ -1,0 +1,1121 @@
+---
+title: "1_Var_Prep_ES"
+author: "Zhimeng Li"
+date: "2023-11-06"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+> This script is used to generate the Emotion Segmentation Task metrics Consensus event agreement (CEA)
+
+#Load packages
+```{r,echo=FALSE}
+#Add your packages in the following list
+list.of.packages = c("dplyr", "ggplot2", "plyr", "tidyverse", "polycor", "psych" ,"data.table", "rstatix", "ggpubr", "tm","jsonlite","rjson","rlist","stringr","segmag","tidyr","purrr","changepoint","DescTools","readr","textstem")
+new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
+if(length(new.packages) > 0) {install.packages(new.packages)}
+lapply(list.of.packages, require, character.only=T)
+```
+
+#Import data
+
+```{r}
+rm(list = ls()) #Please clear the variables saved in the global environment. 
+#Import task data
+dat.cleaned = read.csv("Processed Data/Level0_output/deid_ES_Language_LowEffortRemoved.csv")
+subj=unique(dat.cleaned$subjectID)
+#Add the length of each movie 
+movie = as.data.frame(unique(dat.cleaned$video))
+movie$length = c(123,77,67,94,74,111,66,166,91) #you can find the length info for each movie in the "usable clips.xsls" 
+names(movie)[1] = "video"
+movies = as.character(movie$video)
+```
+
+```{r}
+labonly.data=dat.cleaned %>% filter(condition=="WithLabel")
+segonly.data=dat.cleaned %>% filter(condition=="NoLabel")
+countonly.data=dat.cleaned %>% filter(condition=="Counting")
+```
+
+#MLU
+##lab
+```{r}
+labonly.newdat= labonly.data %>%
+  group_by(video, subjectID) %>%
+  tally()
+labonly.newdat = merge(labonly.newdat, movie, by = "video")
+labonly.newdat$MLU = labonly.newdat$length/((labonly.newdat$n)+1)
+
+labonly.newdat$condition="WithLabel"
+
+write.csv(labonly.newdat,"Processed Data/Level1_output/labonly_MLU_byvideo.csv")
+
+```
+
+```{r}
+labonly.newdat.ave=labonly.newdat %>%
+  group_by(subjectID) %>%
+  dplyr::summarize(ave.n=mean(n),ave.mlu=mean(MLU))
+
+labonly.newdat.ave$condition="WithLabel"
+
+names(labonly.newdat.ave)[2]="SegNum_ave"
+names(labonly.newdat.ave)[3]="MLU_ave"
+
+```
+
+```{r}
+write.csv(labonly.newdat.ave,"Processed Data/Level1_output/labonly_MLU.csv")
+```
+
+##seg
+```{r}
+segonly.newdat= segonly.data %>%
+  group_by(video, subjectID) %>%
+  tally()
+segonly.newdat = merge(segonly.newdat, movie, by = "video")
+segonly.newdat$MLU = segonly.newdat$length/((segonly.newdat$n)+1)
+
+segonly.newdat$condition="NoLabel"
+
+write.csv(segonly.newdat,"Processed Data/Level1_output/segonly_MLU_byvideo.csv")
+
+```
+
+```{r}
+segonly.newdat.ave=segonly.newdat %>%
+  group_by(subjectID) %>%
+  dplyr::summarize(ave.n=mean(n),ave.mlu=mean(MLU))
+
+segonly.newdat.ave$condition="NoLabel"
+
+names(segonly.newdat.ave)[2]="SegNum_ave"
+names(segonly.newdat.ave)[3]="MLU_ave"
+
+```
+
+```{r}
+write.csv(segonly.newdat.ave,"Processed Data/Level1_output/segonly_MLU.csv")
+```
+
+##count
+```{r}
+countonly.newdat= countonly.data %>%
+  group_by(video, subjectID) %>%
+  tally()
+countonly.newdat = merge(countonly.newdat, movie, by = "video")
+countonly.newdat$MLU = countonly.newdat$length/((countonly.newdat$n)+1)
+
+countonly.newdat$condition="Counting"
+
+write.csv(countonly.newdat,"Processed Data/Level1_output/countonly_MLU_byvideo.csv")
+
+```
+
+```{r}
+countonly.newdat.ave=countonly.newdat %>%
+  group_by(subjectID) %>%
+  dplyr::summarize(ave.n=mean(n),ave.mlu=mean(MLU))
+
+countonly.newdat.ave$condition="Counting"
+
+names(countonly.newdat.ave)[2]="countNum_ave"
+names(countonly.newdat.ave)[3]="MLU_ave"
+
+```
+
+```{r}
+write.csv(countonly.newdat.ave,"Processed Data/Level1_output/countonly_MLU.csv")
+```
+
+
+#CEA for full sample
+
+```{r}
+#Subset a dataframe with all timestamps (key press) and corresponding words for each individual of each video
+dat4segmag = dat.cleaned %>% dplyr::select(subjectID,video,timestamp,word,type)
+length = movie$length
+vid = movie$video
+dat4segmag$subjectID= as.factor(as.character(dat4segmag$subjectID))
+```
+
+## Find the critical events and their windows for each video   
+```{r}
+
+set.seed(36448)
+movielist = list()
+segmag1=list()
+critical_cutoff=list()
+max=list()
+min=list()
+for (i in 1:9) {
+      movie_filtered = dat4segmag %>% filter (video == vid[i])
+      segmag1[[i]] <- segmag(movie_filtered$subjectID, movie_filtered$timestamp, time_min=0, time_max=length[i], gauss_sd = 0.8)
+      critical_cutoff[[i]] <- bootstrap_critical_cutoffs(segmag1[[i]],500, .95) 
+      data=segmag1[[i]][["data"]][["segmentation_magnitude"]]
+      max[[i]]=which(flag_maxima_positions(data))
+      min[[i]]=which(flag_minima_positions(data))
+      eb_times <- get_eb_times(segmag1[[i]], critical_cutoff[[i]]) #zl: list of CEA generated
+      movielist[[i]] = eb_times
+}
+
+
+movielist12 = setNames(movielist, vid)
+a= as.data.frame(unlist(movielist12 , recursive = TRUE, use.names = TRUE))
+critical.events = setDT(a, keep.rownames = TRUE)[]
+critical.events$rn = as.character(substr(critical.events$rn, 1, 9))
+names(critical.events)[1:2] = c("video","timestamp")
+#export list of critical events
+#write.csv(critical.events,"Processed Data/Level1_output/full_CEA_criticalEvents.csv")
+#This version contains 79 CE.
+
+```
+
+```{r}
+#plotting critical events
+ for (j in 1:9){
+   plot(segmag1[[j]], critical_cutoff[j],movielist[[j]],  main = paste(vid[j], "with a critical cutoff of 0.95"),cex = 0.5,save_as_png=NULL)
+ }
+
+
+```
+
+****manual merging to produce the final CE list***
+- merging of CE (output: full_mod_CEA_criticalEvents.csv)
+  - Overlapping CEs within 800ms threshold are merged into the average value
+  - the average value is rounded off to similar decimal place as the overlapping CE to ensure transition to ms.
+
+  
+```{r}
+##find the windows of these critical events
+critical.events.merged=read.csv("Processed Data/Level1_output/full_mod_CEA_criticalEvents.csv")#Read in the manually-modified version of CE list
+critical.events.merged=critical.events.merged[,-1] #remove redundant column
+#After merging, we have 70 CE left.
+critical.events.merged$video = as.character(critical.events.merged$video)
+critical.events.merged$timestamp= critical.events.merged$timestamp * 100 
+```
+
+```{r}
+set.seed(36448)
+datalist = list()
+for (i in 1:9) {
+      movie_filtered = dat4segmag %>% filter (video == movies[i])
+      segmag1 <- segmag(movie_filtered$subjectID, movie_filtered$timestamp, time_min=0, time_max=length[i],gauss_sd = 0.8)
+      changeOfpoints = segmag1[["data"]][["segmentation_magnitude"]]
+      MV1 = cpt.meanvar(changeOfpoints,test.stat='Exponential',method='PELT', penalty='Manual',pen.value= '0.045*log(n)') #identify changes in means and variance
+      cps = MV1@cpts
+      m = filter(critical.events.merged,grepl(vid[i],video))
+      window = list()
+      for (j in 1:nrow(m)) {
+        a = (cps-m$timestamp[j])
+        w = match(c(max(a[a <= 0]),min(a[a>=0])),a) #find the maximum negative value and minimum positive value
+        v = as.data.frame(t(array(cps[c(w)])))
+        v$event = m$video[j]
+        v$timestamp = m$timestamp[j]
+        window[[j]] = v
+
+#plotting
+
+      }
+      datalist[[i]] = window
+      plot(MV1,cpt.width=1, main = paste(vid[i],"audio with a penalty of 0.045*log(n)"))
+}
+ 
+
+#open the list twice so we can get to the dataframes 
+a = do.call(rbind,datalist)
+a = do.call(rbind,a)
+```
+
+
+
+```{r}
+#The process creates some repeated lines. We will remove those replicates.
+windows = unique(a)
+names(windows)[1] = "event_start"
+names(windows)[2] = "event_end"
+names(windows)[3]="video" 
+windows<-windows[order(windows[,'video']),]
+unique_window=unique(windows[c("event_start","event_end")])
+#all CE have unique windows
+
+
+#write.csv(windows, file = "Processed Data/Level1_output/full_CEA_Windows.csv")
+
+
+```
+
+## Find whether each event is identified or not by each participant 
+```{r, warning=FALSE}
+windows = read.csv(file = "Processed Data/Level1_output/full_CEA_Windows.csv")#read in the CEs and their windows
+windows = windows[,-1] #Remove the irrelevant first column 
+
+
+idat = dat4segmag #list of timestamps for each participant
+idat$timestamp = idat$timestamp * 100 #converting timestamp to ms
+windows$video = as.integer(windows$video)
+subjID = unique(as.character(idat$subjectID)) #generate a list of subjectIDs
+vlist = list() 
+biglist = list()
+
+#Find out the CE identified by each subject
+for (i in 1:length(subjID)){ 
+  d = filter(idat, subjectID == subjID[i]) #extract all timestamps for both control and emotion videos for this subject [i]
+  for (j in 1:length(vid)){
+    d.w = filter(windows, grepl(movies[j], video)) #filter critical event and windows relevant for emotion video [j]
+    d.w$event.n = 1:nrow(d.w) #mark the critical events with order
+    d.d = filter(d,video == vid[j]) #extract subject [i]'s timestamps and word for emotion video [j]
+    d.d = d.d %>% left_join(d.w, by = c("video" = "video")) %>%  #join the subject[i]'s timestamps with the critical events (e.g. there are 7 critical events, then one timestamp by subject[i] will be mapped for 7 times, corresponding to all critical events)
+      mutate(event.n = if_else(timestamp.x >= event_start & timestamp.x <= event_end, 
+      as.character(event.n), NA_character_)) %>%  #mutate event.n to reflect whether the specific CE marked by event.n is captured by the subject [i]
+      arrange(event.n) %>% #rearrange event.n to place all the non-captured CE to the abck
+      distinct(timestamp.x, video, .keep_all = T) %>% #remove the redundant timestamps by subject[i] generated by the joining step
+      filter(!is.na(event.n)) #filter out the non-captured CE
+    vlist[[j]] = d.d
+  }
+  biglist[[i]] = vlist
+}
+
+a = do.call(rbind,biglist)
+a = do.call(rbind,a)
+```
+
+```{r}
+names(a)[3] = "Timestamp"
+names(a)[8] = "Critical_Event_Timestamp"
+
+#check if any subject did not identify ANY critical event
+subjID2 <- filter(a, type=="emotion") 
+subjID2 <- unique(as.character(subjID2$subjectID)) #All subject identify at least one CE
+
+write.csv(a, "Processed Data/Level1_output/full_CEA_IdentifiedByIndividuals.csv")
+#a=read.csv("Processed Data/Level1_output/full_CEA_IdentifiedByIndividuals.csv")
+#a=a[,-1]
+```
+
+## Calculate CEA 
+```{r}
+#We will now calculate the metric Consensus Event Agreement (CEA). This measures the percentage that an individual has identified the critical events agreed by the group (as identified by segmag).
+critical.events.merged=read.csv("Processed Data/Level1_output/full_mod_CEA_criticalEvents.csv")#Read in the manually-modified version of CE list
+critical.events.merged$video = as.character(critical.events.merged$video)
+critical.events.merged$timestamp= critical.events.merged$timestamp * 100 
+
+#First count the total number of consensus events for each video based on the dataframe "critical_event_merged"
+critical.segmag = count(critical.events.merged$video)
+names(critical.segmag)[1] = "video"
+names(critical.segmag)[2] = "consensus"
+
+#Excluding events that are identified multiple times by the same subjects 
+dat.unique = a[!duplicated(a[,c('subjectID','video','event.n')]),]
+subjID <- filter(dat.unique, type=="emotion") 
+subjID <- unique(as.character(subjID$subjectID))
+
+#check if the final output still contain 70 distinct CE and windows
+test_v =  unique(dat.unique[c("event_start","event_end")])
+
+```
+
+```{r}
+write.csv(dat.unique, "Processed Data/Level1_output/full_Dat4AffectVec.csv")
+
+```
+
+```{r}
+#Find the total number of consensus events identified by each subject for a given video
+dat.group = dat.unique %>% group_by(video, type, subjectID) %>% tally()
+
+#Map the total consensus event identified by the segmag 
+dat.consensus = merge(dat.group, critical.segmag, by="video") #Introduce the new variable "consensus" which is the # of CE for each video
+
+# It is calculated as the total number of critical events hit by the subject for a given filem / the sum of consensus events identified by segmag for a given film.
+dat.consensus$CEA = dat.consensus$n/dat.consensus$consensus 
+
+dat.id <- dat.cleaned %>% dplyr::select(subjectID,condition)
+dat.id=unique(dat.id)
+
+for (i in 1:nrow(dat.consensus)){
+    mark=which(dat.consensus[i,'subjectID'] == dat.id[,'subjectID'])
+    dat.consensus[i,'condition']=dat.id[mark,'condition']
+}
+#write.csv(dat.consensus,"Processed Data/Level1_output/full_CEA.csv")
+```
+
+
+
+#**within-group robustness check
+
+
+#CEA for lab only condition
+```{r}
+#Subset a dataframe with all timestamps (key press) and corresponding words for each individual of each video
+lab.dat4segmag = labonly.data %>% dplyr::select(subjectID,video,timestamp,word,type)
+length = movie$length
+vid = movie$video
+lab.dat4segmag$subjectID= as.factor(as.character(lab.dat4segmag$subjectID))
+```
+
+
+## Find the critical events and their windows for each video   
+```{r}
+
+set.seed(36448)
+movielist = list()
+segmag1=list()
+critical_cutoff=list()
+for (i in 1:9) {
+      movie_filtered = lab.dat4segmag %>% filter (video == vid[i])
+      segmag1[[i]] <- segmag(movie_filtered$subjectID, movie_filtered$timestamp, time_min=0, time_max=length[i], gauss_sd = 0.8)
+      critical_cutoff[[i]] <- bootstrap_critical_cutoffs(segmag1[[i]],500, .95) 
+      eb_times <- get_eb_times(segmag1[[i]], critical_cutoff[[i]]) #zl: list of CEA generated
+      movielist[[i]] = eb_times
+}
+
+
+
+movielist12 = setNames(movielist, vid)
+a= as.data.frame(unlist(movielist12 , recursive = TRUE, use.names = TRUE))
+
+lab.critical.events = setDT(a, keep.rownames = TRUE)[]
+lab.critical.events$rn = as.character(substr(lab.critical.events$rn, 1, 9))
+names(lab.critical.events)[1:2] = c("video","timestamp")
+#export list of critical events
+
+
+```
+
+```{r}
+#plotting critical events
+for (j in 1:9) {
+  pdf(file = paste0("visual/plot_", vid[j], "_with_labeling_behavior.pdf"), width = 10, height = 5.625)
+  plot(segmag1[[j]], critical_cutoff[j], movielist[[j]],
+       main = paste(vid[j], "for with labeling behavior"),
+       cex = 0.5)
+  dev.off()
+}
+```
+
+```{r}
+write.csv(lab.critical.events,"Processed Data/Level1_output/LAB_CEA_criticalEvents.csv")
+#This version contains 40 CE.
+```
+
+
+****manual merging to produce the final CE list***
+- merging of CE (output: LAB_mod_CEA_criticalEvents.csv)
+  - Overlapping CEs within 800ms threshold are merged into the average value
+  - the average value is rounded off to similar decimal place as the overlapping CE to ensure transition to ms.
+  
+  
+```{r}
+##find the windows of these critical events
+lab.critical.events.merged=read.csv("Processed Data/Level1_output/LAB_mod_CEA_criticalEvents.csv")#Read in the manually-modified version of CE list
+lab.critical.events.merged=lab.critical.events.merged[,-1] #remove redundant column
+#After merging, we have 38 CE left.
+lab.critical.events.merged$video = as.character(lab.critical.events.merged$video)
+lab.critical.events.merged$timestamp= lab.critical.events.merged$timestamp * 100 
+```
+
+```{r}
+set.seed(36448)
+datalist = list()
+original.ce <- read.csv("Processed Data/Level1_output/LAB_CEA_criticalEvents.csv") %>% mutate(timestamp=timestamp*100)
+
+for (i in 1:9) {
+      movie_filtered = lab.dat4segmag %>% filter (video == movies[i])
+      original.ce.sub <- original.ce %>% filter (video == movies[i]) #CEs for movie i 
+      segmag1 <- segmag(movie_filtered$subjectID, movie_filtered$timestamp, time_min=0, time_max=length[i],gauss_sd = 0.8)
+      changeOfpoints = segmag1[["data"]][["segmentation_magnitude"]]
+      max <- as.integer(which(flag_maxima_positions(changeOfpoints))) #identify local maxima (based on CEs identified from segmag object)
+      remove.max <- which(max %in% (as.integer(original.ce.sub$timestamp+1)))
+      if (length(remove.max) != 0) {
+        max <- max[-(remove.max)] #remove those maxima that were already identified as CEs
+      }
+      
+      min <- as.integer(which(flag_minima_positions(changeOfpoints))) #identify local minima
+      remove.min <- which(min %in% (as.integer(original.ce.sub$timestamp+1)))
+      if (length(remove.min) != 0){
+        min <- min[-(remove.min)]
+      }
+      m = filter(lab.critical.events.merged,grepl(vid[i],video))
+      window = list()
+      for (j in 1:nrow(m)) {
+        a = (c(max,min)-m$timestamp[j])
+        a <- as.integer(a)
+        a <- a[a != 1] #remove the changeofpoint that is the CE
+        a <- a[a != -1] #remove the changeofpoint that is the CE
+        a <- a[a != 0] #remove the changeofpoint that is the CE
+        w = match(c(max(a[a <= 0]),min(a[a>=0])),a) #find the maximum negative value and minimum positive value 
+        v = as.data.frame(t(array(m$timestamp[j]+a[c(w)])))
+        v$event = m$video[j]
+        v$timestamp = m$timestamp[j]
+        window[[j]] = v
+        
+        
+      }
+      datalist[[i]] = window
+      
+}
+ 
+#open the list twice so we can get to the dataframes 
+a = do.call(c,datalist)
+a = do.call(rbind,a)
+```
+
+```{r}
+#The process creates some repeated lines. We will remove those replicates.
+lab.windows = unique(a)
+names(lab.windows)[1] = "event_start"
+names(lab.windows)[2] = "event_end"
+names(lab.windows)[3]="video" 
+lab.windows<-lab.windows[order(lab.windows[,'video']),]
+unique_window=unique(lab.windows[c("event_start","event_end")])
+#We have 38 unique windows
+
+
+```
+
+```{R}
+write.csv(lab.windows, file = "Processed Data/Level1_output/LAB_CEA_Windows.csv")
+```
+
+## Find whether each event is identified or not by each participant 
+```{r, warning=FALSE}
+lab.windows = read.csv(file = "Processed Data/Level1_output/LAB_CEA_Windows.csv")#read in the CEs and their windows
+lab.windows = lab.windows[,-1] #Remove the irrelevant first column 
+
+
+lab.idat = lab.dat4segmag #list of timestamps for each participant
+lab.idat$timestamp = lab.idat$timestamp * 100 #converting timestamp to ms
+lab.windows$video = as.integer(lab.windows$video)
+lab.subjID = unique(as.character(lab.idat$subjectID)) #generate a list of subjectIDs
+vlist = list() 
+biglist = list()
+
+#Find out the CE identified by each subject
+for (i in 1:length(lab.subjID)){ 
+  d = filter(lab.idat, subjectID == lab.subjID[i]) #extract all timestamps for both control and emotion videos for this subject [i]
+  for (j in 1:length(vid)){
+    d.w = filter(lab.windows, grepl(movies[j], video)) #filter critical event and windows relevant for emotion video [j]
+    d.w$event.n = 1:nrow(d.w) #mark the critical events with order
+    d.d = filter(d,video == vid[j]) #extract subject [i]'s timestamps and word for emotion video [j]
+    d.d = d.d %>% left_join(d.w, by = c("video" = "video")) %>%  #join the subject[i]'s timestamps with the critical events (e.g. there are 7 critical events, then one timestamp by subject[i] will be mapped for 7 times, corresponding to all critical events)
+      mutate(event.n = if_else(timestamp.x >= event_start & timestamp.x <= event_end, 
+      as.character(event.n), NA_character_)) %>%  #mutate event.n to reflect whether the specific CE marked by event.n is captured by the subject [i]
+      arrange(event.n) %>% #rearrange event.n to place all the non-captured CE to the abck
+      distinct(timestamp.x, video, .keep_all = T) %>% #remove the redundant timestamps by subject[i] generated by the joining step
+      filter(!is.na(event.n)) #filter out the non-captured CE
+    vlist[[j]] = d.d
+  }
+  biglist[[i]] = vlist
+}
+
+a = do.call(rbind,biglist)
+a = do.call(rbind,a)
+```
+
+```{r}
+names(a)[3] = "Timestamp"
+names(a)[8] = "Critical_Event_Timestamp"
+
+#check if any subject did not identify ANY critical event
+lab.subjID2 <- filter(a, type=="emotion") 
+lab.subjID2 <- unique(as.character(lab.subjID2$subjectID)) #All subject identify at least one CE
+```
+
+```{r}
+write.csv(a, "Processed Data/Level1_output/LAB_CEA_IdentifiedByIndividuals.csv")
+```
+
+## Calculate CEA 
+```{r}
+#We will now calculate the metric Consensus Event Agreement (CEA). This measures the percentage that an individual has identified the critical events agreed by the group (as identified by segmag).
+lab.critical.events.merged=read.csv("Processed Data/Level1_output/LAB_mod_CEA_criticalEvents.csv")#Read in the manually-modified version of CE list
+lab.critical.events.merged$video = as.character(lab.critical.events.merged$video)
+lab.critical.events.merged$timestamp= lab.critical.events.merged$timestamp * 100 
+
+#First count the total number of consensus events for each video based on the dataframe "critical_event_merged"
+lab.critical.segmag = count(lab.critical.events.merged$video)
+names(lab.critical.segmag)[1] = "video"
+names(lab.critical.segmag)[2] = "consensus"
+
+#Excluding events that are identified multiple times by the same subjects 
+lab.dat.unique = a[!duplicated(a[,c('subjectID','video','event.n')]),]
+lab.subjID <- filter(lab.dat.unique, type=="emotion") 
+lab.subjID <- unique(as.character(lab.subjID$subjectID))
+
+#check if the final output still contain 38 distinct CE and windows
+test_v =  unique(lab.dat.unique[c("event_start","event_end")])
+
+```
+
+```{r}
+write.csv(lab.dat.unique, "Processed Data/Level1_output/lab_Dat4AffectVec.csv")
+
+```
+
+```{r}
+#Find the total number of consensus events identified by each subject for a given video
+lab.dat.group = lab.dat.unique %>% group_by(video, type, subjectID) %>% tally()
+
+#Map the total consensus event identified by the segmag 
+lab.dat.consensus = merge(lab.dat.group, lab.critical.segmag, by="video") #Introduce the new variable "consensus" which is the # of CE for each video
+
+# It is calculated as the total number of critical events hit by the subject for a given filem / the sum of consensus events identified by segmag for a given film.
+lab.dat.consensus$CEA = lab.dat.consensus$n/lab.dat.consensus$consensus 
+lab.dat.consensus$condition="WithLabel"
+```
+
+```{r}
+write.csv(lab.dat.consensus,"Processed Data/Level1_output/LAB_CEA.csv")
+```
+
+
+#CEA for seg only condition
+```{r}
+#Subset a dataframe with all timestamps (key press) and corresponding words for each individual of each video
+seg.dat4segmag = segonly.data %>% dplyr::select(subjectID,video,timestamp,word,type)
+length = movie$length
+vid = movie$video
+seg.dat4segmag$subjectID= as.factor(as.character(seg.dat4segmag$subjectID))
+```
+
+## Find the critical events and their windows for each video   
+```{r}
+
+set.seed(36448)
+movielist = list()
+segmag1=list()
+critical_cutoff=list()
+for (i in 1:9) {
+      movie_filtered = seg.dat4segmag %>% filter (video == vid[i])
+      segmag1[[i]] <- segmag(movie_filtered$subjectID, movie_filtered$timestamp, time_min=0, time_max=length[i], gauss_sd = 0.8)
+      critical_cutoff[[i]] <- bootstrap_critical_cutoffs(segmag1[[i]],500, .95) 
+      eb_times <- get_eb_times(segmag1[[i]], critical_cutoff[[i]]) #zl: list of CEA generated
+      movielist[[i]] = eb_times
+}
+
+
+
+movielist12 = setNames(movielist, vid)
+a= as.data.frame(unlist(movielist12 , recursive = TRUE, use.names = TRUE))
+
+seg.critical.events = setDT(a, keep.rownames = TRUE)[]
+seg.critical.events$rn = as.character(substr(seg.critical.events$rn, 1, 9))
+names(seg.critical.events)[1:2] = c("video","timestamp")
+```
+
+```{r}
+#export list of critical events
+write.csv(seg.critical.events,"Processed Data/Level1_output/SEG_CEA_criticalEvents.csv")
+#This version contains 78 CE.
+
+```
+
+```{r}
+#plotting critical events
+for (j in 1:9) {
+  pdf(file = paste0("visual/plot_", vid[j], "_no_labeling.pdf"), width = 10, height = 5.625)
+  plot(segmag1[[j]], critical_cutoff[j], movielist[[j]],
+       main = paste(vid[j], "without labeling behavior"),
+       cex = 0.5)
+  dev.off()
+}
+```
+
+****manual merging to produce the final CE list***
+- merging of CE (output: SEG_mod_CEA_criticalEvents.csv)
+  - Overlapping CEs within 800ms threshold are merged into the average value
+  - the average value is rounded off to similar decimal place as the overlapping CE to ensure transition to ms.
+
+  
+```{r}
+##find the windows of these critical events
+seg.critical.events.merged=read.csv("Processed Data/Level1_output/SEG_mod_CEA_criticalEvents.csv")#Read in the manually-modified version of CE list
+seg.critical.events.merged=seg.critical.events.merged[,-1] #remove redundant column
+#After merging, we have 72 CE left.
+seg.critical.events.merged$video = as.character(seg.critical.events.merged$video)
+seg.critical.events.merged$timestamp= seg.critical.events.merged$timestamp * 100 
+```
+
+```{r}
+set.seed(36448)
+datalist = list()
+original.ce <- read.csv("Processed Data/Level1_output/SEG_CEA_criticalEvents.csv") %>% mutate(timestamp=timestamp*100)
+
+for (i in 1:9) {
+      movie_filtered = seg.dat4segmag %>% filter (video == movies[i])
+      original.ce.sub <- original.ce %>% filter (video == movies[i]) #CEs for movie i 
+
+      segmag1 <- segmag(movie_filtered$subjectID, movie_filtered$timestamp, time_min=0, time_max=length[i],gauss_sd = 0.8)
+      changeOfpoints = segmag1[["data"]][["segmentation_magnitude"]]
+      max <- as.integer(which(flag_maxima_positions(changeOfpoints))) #identify local maxima (based on CEs identified from segmag object)
+      remove.max <- which(max %in% (as.integer(original.ce.sub$timestamp+1)))
+      if (length(remove.max) != 0) {
+        max <- max[-(remove.max)] #remove those maxima that were already identified as CEs
+      }
+      
+      min <- as.integer(which(flag_minima_positions(changeOfpoints))) #identify local minima
+      remove.min <- which(min %in% (as.integer(original.ce.sub$timestamp+1)))
+      if (length(remove.min) != 0){
+        min <- min[-(remove.min)]
+      }
+      m = filter(seg.critical.events.merged,grepl(vid[i],video))
+      window = list()
+      for (j in 1:nrow(m)) {
+        a = (c(max,min)-m$timestamp[j])
+        a <- as.integer(a)
+        a <- a[a != 1] #remove the changeofpoint that is the CE
+        a <- a[a != -1] #remove the changeofpoint that is the CE
+        a <- a[a != 0] #remove the changeofpoint that is the CE
+        w = match(c(max(a[a <= 0]),min(a[a>=0])),a) #find the maximum negative value and minimum positive value 
+        v = as.data.frame(t(array(m$timestamp[j]+a[c(w)])))
+        v$event = m$video[j]
+        v$timestamp = m$timestamp[j]
+        window[[j]] = v
+        
+        
+      }
+      datalist[[i]] = window
+      
+}
+ 
+#open the list twice so we can get to the dataframes 
+a = do.call(c,datalist)
+a = do.call(rbind,a)
+```
+
+```{r}
+#The process creates some repeated lines. We will remove those replicates.
+seg.windows = unique(a)
+names(seg.windows)[1] = "event_start"
+names(seg.windows)[2] = "event_end"
+names(seg.windows)[3]="video" 
+seg.windows<-seg.windows[order(seg.windows[,'video']),]
+unique_window=unique(seg.windows[c("event_start","event_end")])
+#We have 71 unique windows
+
+
+```
+
+
+```{r}
+write.csv(seg.windows, file = "Processed Data/Level1_output/SEG_CEA_Windows.csv")
+```
+
+##Find whether each event is identified or not by each participant 
+```{r, warning=FALSE}
+seg.windows = read.csv(file = "Processed Data/Level1_output/seg_CEA_Windows.csv")#read in the CEs and their windows
+seg.windows = seg.windows[,-1] #Remove the irrelevant first column 
+
+
+seg.idat = seg.dat4segmag #list of timestamps for each participant
+seg.idat$timestamp = seg.idat$timestamp * 100 #converting timestamp to ms
+seg.windows$video = as.integer(seg.windows$video)
+seg.subjID = unique(as.character(seg.idat$subjectID)) #generate a list of subjectIDs
+vlist = list() 
+biglist = list()
+
+#Find out the CE identified by each subject
+for (i in 1:length(seg.subjID)){ 
+  d = filter(seg.idat, subjectID == seg.subjID[i]) #extract all timestamps for both control and emotion videos for this subject [i]
+  for (j in 1:length(vid)){
+    d.w = filter(seg.windows, grepl(movies[j], video)) #filter critical event and windows relevant for emotion video [j]
+    d.w$event.n = 1:nrow(d.w) #mark the critical events with order
+    d.d = filter(d,video == vid[j]) #extract subject [i]'s timestamps and word for emotion video [j]
+    d.d = d.d %>% left_join(d.w, by = c("video" = "video")) %>%  #join the subject[i]'s timestamps with the critical events (e.g. there are 7 critical events, then one timestamp by subject[i] will be mapped for 7 times, corresponding to all critical events)
+      mutate(event.n = if_else(timestamp.x >= event_start & timestamp.x <= event_end, 
+      as.character(event.n), NA_character_)) %>%  #mutate event.n to reflect whether the specific CE marked by event.n is captured by the subject [i]
+      arrange(event.n) %>% #rearrange event.n to place all the non-captured CE to the abck
+      distinct(timestamp.x, video, .keep_all = T) %>% #remove the redundant timestamps by subject[i] generated by the joining step
+      filter(!is.na(event.n)) #filter out the non-captured CE
+    vlist[[j]] = d.d
+  }
+  biglist[[i]] = vlist
+}
+
+a = do.call(rbind,biglist)
+a = do.call(rbind,a)
+```
+
+```{r}
+names(a)[3] = "Timestamp"
+names(a)[8] = "Critical_Event_Timestamp"
+
+#check if any subject did not identify ANY critical event
+seg.subjID2 <- filter(a, type=="emotion") 
+seg.subjID2 <- unique(as.character(seg.subjID2$subjectID)) #All subject identify at least one CE
+```
+
+```{r}
+write.csv(a, "Processed Data/Level1_output/SEG_CEA_IdentifiedByIndividuals.csv")
+```
+
+## Calculate CEA 
+```{r}
+#We will now calculate the metric Consensus Event Agreement (CEA). This measures the percentage that an individual has identified the critical events agreed by the group (as identified by segmag).
+seg.critical.events.merged=read.csv("Processed Data/Level1_output/SEG_mod_CEA_criticalEvents.csv")#Read in the manually-modified version of CE list
+seg.critical.events.merged$video = as.character(seg.critical.events.merged$video)
+seg.critical.events.merged$timestamp= seg.critical.events.merged$timestamp * 100 
+
+#First count the total number of consensus events for each video based on the dataframe "critical_event_merged"
+seg.critical.segmag = count(seg.critical.events.merged$video)
+names(seg.critical.segmag)[1] = "video"
+names(seg.critical.segmag)[2] = "consensus"
+
+#Excluding events that are identified multiple times by the same subjects 
+seg.dat.unique = a[!duplicated(a[,c('subjectID','video','event.n')]),]
+seg.subjID <- filter(seg.dat.unique, type=="emotion") 
+seg.subjID <- unique(as.character(seg.subjID$subjectID))
+
+#check if the final output still contain 71 distinct CE and windows
+test_v =  unique(seg.dat.unique[c("event_start","event_end")])
+
+```
+
+```{r}
+#Find the total number of consensus events identified by each subject for a given video
+seg.dat.group = seg.dat.unique %>% group_by(video, type, subjectID) %>% tally()
+
+#Map the total consensus event identified by the segmag 
+seg.dat.consensus = merge(seg.dat.group, seg.critical.segmag, by="video") #Introduce the new variable "consensus" which is the # of CE for each video
+
+# It is calculated as the total number of critical events hit by the subject for a given filem / the sum of consensus events identified by segmag for a given film.
+seg.dat.consensus$CEA = seg.dat.consensus$n/seg.dat.consensus$consensus 
+seg.dat.consensus$condition="NoLabel"
+```
+
+```{r}
+write.csv(seg.dat.consensus,"Processed Data/Level1_output/SEG_CEA.csv")
+```
+
+#CEA for count only condition
+```{r}
+#Subset a dataframe with all timestamps (key press) and corresponding words for each individual of each video
+count.dat4segmag = countonly.data %>% dplyr::select(subjectID,video,timestamp,word,type)
+length = movie$length
+vid = movie$video
+count.dat4segmag$subjectID= as.factor(as.character(count.dat4segmag$subjectID))
+```
+
+## Find the critical events and their windows for each video   
+```{r}
+
+
+set.seed(36448)
+movielist = list()
+segmag1=list()
+critical_cutoff=list()
+for (i in 1:9) {
+      movie_filtered = count.dat4segmag %>% filter (video == vid[i])
+      segmag1[[i]] <- segmag(movie_filtered$subjectID, movie_filtered$timestamp, time_min=0, time_max=length[i], gauss_sd = 0.8)
+      critical_cutoff[[i]] <- bootstrap_critical_cutoffs(segmag1[[i]],500, .95) 
+      eb_times <- get_eb_times(segmag1[[i]], critical_cutoff[[i]]) #zl: list of CEA generated
+      movielist[[i]] = eb_times
+}
+
+
+
+movielist12 = setNames(movielist, vid)
+a= as.data.frame(unlist(movielist12 , recursive = TRUE, use.names = TRUE))
+
+count.critical.events = setDT(a, keep.rownames = TRUE)[]
+count.critical.events$rn = as.character(substr(count.critical.events$rn, 1, 9))
+names(count.critical.events)[1:2] = c("video","timestamp")
+```
+
+```{r}
+#export list of critical events
+write.csv(count.critical.events,"Processed Data/Level1_output/COUNT_CEA_criticalEvents.csv")
+#This version contains 57 CE.
+
+```
+
+```{r}
+#plotting critical events
+for (j in 1:9) {
+  pdf(file = paste0("visual/plot_", vid[j], "_with_counteling_behavior.pdf"), width = 10, height = 5.625)
+  plot(segmag1[[j]], critical_cutoff[j], movielist[[j]],
+       main = paste(vid[j], "for with counteling behavior"),
+       cex = 0.5)
+  dev.off()
+}
+```
+
+****manual merging to produce the final CE list***
+- merging of CE (output: COUNT_mod_CEA_criticalEvents.csv)
+  - Overlapping CEs within 800ms threshold are merged into the average value
+  - the average value is rounded off to similar decimal place as the overlapping CE to ensure transition to ms.
+
+
+  
+```{r}
+##find the windows of these critical events
+count.critical.events.merged=read.csv("Processed Data/Level1_output/COUNT_mod_CEA_criticalEvents.csv")#Read in the manually-modified version of CE list
+count.critical.events.merged=count.critical.events.merged[,-1] #remove redundant column
+#After merging, we have 52 CE left.
+count.critical.events.merged$video = as.character(count.critical.events.merged$video)
+count.critical.events.merged$timestamp= count.critical.events.merged$timestamp * 100 
+```
+
+```{r}
+set.seed(36448)
+datalist = list()
+original.ce <- read.csv("Processed Data/Level1_output/COUNT_CEA_criticalEvents.csv") %>% mutate(timestamp=timestamp*100)
+
+for (i in 1:9) {
+      movie_filtered = count.dat4segmag %>% filter (video == movies[i])
+      original.ce.sub <- original.ce %>% filter (video == movies[i]) #CEs for movie i 
+
+      segmag1 <- segmag(movie_filtered$subjectID, movie_filtered$timestamp, time_min=0, time_max=length[i],gauss_sd = 0.8)
+      changeOfpoints = segmag1[["data"]][["segmentation_magnitude"]]
+      max <- as.integer(which(flag_maxima_positions(changeOfpoints))) #identify local maxima (based on CEs identified from segmag object)
+      remove.max <- which(max %in% (as.integer(original.ce.sub$timestamp+1)))
+      if (length(remove.max) != 0) {
+        max <- max[-(remove.max)] #remove those maxima that were already identified as CEs
+      }
+      
+      min <- as.integer(which(flag_minima_positions(changeOfpoints))) #identify local minima
+      remove.min <- which(min %in% (as.integer(original.ce.sub$timestamp+1)))
+      if (length(remove.min) != 0){
+        min <- min[-(remove.min)]
+      }
+      m = filter(count.critical.events.merged,grepl(vid[i],video))
+      window = list()
+      for (j in 1:nrow(m)) {
+        a = (c(max,min)-m$timestamp[j])
+        a <- as.integer(a)
+        a <- a[a != 1] #remove the changeofpoint that is the CE
+        a <- a[a != -1] #remove the changeofpoint that is the CE
+        a <- a[a != 0] #remove the changeofpoint that is the CE
+        w = match(c(max(a[a <= 0]),min(a[a>=0])),a) #find the maximum negative value and minimum positive value 
+        v = as.data.frame(t(array(m$timestamp[j]+a[c(w)])))
+        v$event = m$video[j]
+        v$timestamp = m$timestamp[j]
+        window[[j]] = v
+        
+        
+      }
+      datalist[[i]] = window
+      
+}
+ 
+#open the list twice so we can get to the dataframes 
+a = do.call(c,datalist)
+a = do.call(rbind,a)
+```
+
+```{r}
+#The process creates some repeated lines. We will remove those replicates.
+count.windows = unique(a)
+names(count.windows)[1] = "event_start"
+names(count.windows)[2] = "event_end"
+names(count.windows)[3]="video" 
+count.windows<-count.windows[order(count.windows[,'video']),]
+unique_window=unique(count.windows[c("event_start","event_end")])
+#We have 52 unique windows,
+
+```
+
+```{r}
+
+write.csv(count.windows, file = "Processed Data/Level1_output/COUNT_CEA_Windows.csv")
+```
+
+## Find whether each event is identified or not by each participant 
+```{r, warning=FALSE}
+count.windows = read.csv(file = "Processed Data/Level1_output/COUNT_CEA_Windows.csv")#read in the CEs and their windows
+count.windows = count.windows[,-1] #Remove the irrelevant first column 
+
+
+count.idat = count.dat4segmag #list of timestamps for each participant
+count.idat$timestamp = count.idat$timestamp * 100 #converting timestamp to ms
+count.windows$video = as.integer(count.windows$video)
+count.subjID = unique(as.character(count.idat$subjectID)) #generate a list of subjectIDs
+vlist = list() 
+biglist = list()
+
+#Find out the CE identified by each subject
+for (i in 1:length(count.subjID)){ 
+  d = filter(count.idat, subjectID == count.subjID[i]) #extract all timestamps for both control and emotion videos for this subject [i]
+  for (j in 1:length(vid)){
+    d.w = filter(count.windows, grepl(movies[j], video)) #filter critical event and windows relevant for emotion video [j]
+    d.w$event.n = 1:nrow(d.w) #mark the critical events with order
+    d.d = filter(d,video == vid[j]) #extract subject [i]'s timestamps and word for emotion video [j]
+    d.d = d.d %>% left_join(d.w, by = c("video" = "video")) %>%  #join the subject[i]'s timestamps with the critical events (e.g. there are 7 critical events, then one timestamp by subject[i] will be mapped for 7 times, corresponding to all critical events)
+      mutate(event.n = if_else(timestamp.x >= event_start & timestamp.x <= event_end, 
+      as.character(event.n), NA_character_)) %>%  #mutate event.n to reflect whether the specific CE marked by event.n is captured by the subject [i]
+      arrange(event.n) %>% #rearrange event.n to place all the non-captured CE to the abck
+      distinct(timestamp.x, video, .keep_all = T) %>% #remove the redundant timestamps by subject[i] generated by the joining step
+      filter(!is.na(event.n)) #filter out the non-captured CE
+    vlist[[j]] = d.d
+  }
+  biglist[[i]] = vlist
+}
+
+a = do.call(rbind,biglist)
+a = do.call(rbind,a)
+```
+
+```{r}
+names(a)[3] = "Timestamp"
+names(a)[8] = "Critical_Event_Timestamp"
+
+#check if any subject did not identify ANY critical event
+count.subjID2 <- filter(a, type=="emotion") 
+count.subjID2 <- unique(as.character(count.subjID2$subjectID)) #All subject identify at least one CE
+```
+
+```{r}
+write.csv(a, "Processed Data/Level1_output/COUNT_CEA_IdentifiedByIndividuals.csv")
+```
+
+## Calculate CEA 
+```{r}
+#We will now calculate the metric Consensus Event Agreement (CEA). This measures the percentage that an individual has identified the critical events agreed by the group (as identified by segmag).
+count.critical.events.merged=read.csv("Processed Data/Level1_output/COUNT_mod_CEA_criticalEvents.csv")#Read in the manually-modified version of CE list
+count.critical.events.merged$video = as.character(count.critical.events.merged$video)
+count.critical.events.merged$timestamp= count.critical.events.merged$timestamp * 100 
+
+#First count the total number of consensus events for each video based on the dataframe "critical_event_merged"
+count.critical.segmag = count(count.critical.events.merged$video)
+names(count.critical.segmag)[1] = "video"
+names(count.critical.segmag)[2] = "consensus"
+
+#Excluding events that are identified multiple times by the same subjects 
+count.dat.unique = a[!duplicated(a[,c('subjectID','video','event.n')]),]
+count.subjID <- filter(count.dat.unique, type=="emotion") 
+count.subjID <- unique(as.character(count.subjID$subjectID))
+
+#check if the final output still contain 52 distinct CE and windows
+test_v =  unique(count.dat.unique[c("event_start","event_end")])
+
+```
+
+```{r}
+#Find the total number of consensus events identified by each subject for a given video
+count.dat.group = count.dat.unique %>% group_by(video, type, subjectID) %>% tally()
+
+#Map the total consensus event identified by the segmag 
+count.dat.consensus = merge(count.dat.group, count.critical.segmag, by="video") #Introduce the new variable "consensus" which is the # of CE for each video
+
+# It is calculated as the total number of critical events hit by the subject for a given filem / the sum of consensus events identified by segmag for a given film.
+count.dat.consensus$CEA = count.dat.consensus$n/count.dat.consensus$consensus 
+count.dat.consensus$condition="Counting"
+
+write.csv(count.dat.consensus,"Processed Data/Level1_output/COUNT_CEA.csv")
+```
+
+
+
+
+
+
+
+###visual - overlaid segamg
+```{r}
+#Subset a dataframe with all timestamps (key press) and corresponding words for each individual of each video
+lab.dat4segmag = labonly.data %>% dplyr::select(subjectID,video,timestamp,word,type)
+length = movie$length
+vid = movie$video
+lab.dat4segmag$subjectID= as.factor(as.character(lab.dat4segmag$subjectID))
+```
+
+```{r}
+#Subset a dataframe with all timestamps (key press) and corresponding words for each individual of each video
+seg.dat4segmag = segonly.data %>% dplyr::select(subjectID,video,timestamp,word,type)
+length = movie$length
+vid = movie$video
+seg.dat4segmag$subjectID= as.factor(as.character(seg.dat4segmag$subjectID))
+```
+
+```{r}
+#Subset a dataframe with all timestamps (key press) and corresponding words for each individual of each video
+count.dat4segmag = countonly.data %>% dplyr::select(subjectID,video,timestamp,word,type)
+length = movie$length
+vid = movie$video
+count.dat4segmag$subjectID= as.factor(as.character(count.dat4segmag$subjectID))
+```
+
+```{r}
+
+set.seed(36448)
+
+for (i in 1:9) {
+      lab_movie_filtered = lab.dat4segmag %>% filter (video == vid[i])
+      lab_segmag1 <- segmag(lab_movie_filtered$subjectID, lab_movie_filtered$timestamp, time_min=0, time_max=length[i], gauss_sd = 0.8)
+      lab_critical_cutoff <- bootstrap_critical_cutoffs(lab_segmag1,500, .95) 
+      lab_eb_times <- get_eb_times(lab_segmag1, lab_critical_cutoff) 
+      
+      seg_movie_filtered = seg.dat4segmag %>% filter (video == vid[i])
+      seg_segmag1 <- segmag(seg_movie_filtered$subjectID, seg_movie_filtered$timestamp, time_min=0, time_max=length[i], gauss_sd = 0.8)
+      seg_critical_cutoff <- bootstrap_critical_cutoffs(seg_segmag1,500, .95) 
+      seg_eb_times <- get_eb_times(seg_segmag1, seg_critical_cutoff) 
+      
+      count_movie_filtered = count.dat4segmag %>% filter (video == vid[i])
+      count_segmag1 <- segmag(count_movie_filtered$subjectID, count_movie_filtered$timestamp, time_min=0, time_max=length[i], gauss_sd = 0.8)
+      count_critical_cutoff <- bootstrap_critical_cutoffs(count_segmag1,500, .95) 
+      count_eb_times <- get_eb_times(count_segmag1, count_critical_cutoff) 
+      
+      df1 <- data.frame(
+  time = lab_segmag1[["data"]][["time"]],
+  mag  = lab_segmag1[["data"]][["segmentation_magnitude"]],
+  series = "Series lab"
+)
+
+df2 <- data.frame(
+  time = seg_segmag1[["data"]][["time"]],
+  mag  = seg_segmag1[["data"]][["segmentation_magnitude"]],
+  series = "Series seg"
+  
+)
+  
+  df3 <- data.frame(
+  time = count_segmag1[["data"]][["time"]],
+  mag  = count_segmag1[["data"]][["segmentation_magnitude"]],
+  series = "Series count"
+)
+
+df_all <- bind_rows(df1, df2,df3)
+
+crit_df1 <- data.frame(time = lab_eb_times, series = "Series lab")
+crit_df2 <- data.frame(time = seg_eb_times, series = "Series seg")
+crit_df3 <- data.frame(time = count_eb_times, series = "Series count")
+
+
+crit_all <- bind_rows(crit_df1, crit_df2,crit_df3)
+
+p<-ggplot(df_all, aes(x = time, y = mag, color = series)) +
+  geom_line(size = 0.9) +
+  
+  # Critical timepoints as vertical lines:
+  geom_vline(data = crit_all,
+             aes(xintercept = time, color = series),
+             linetype = "dashed", alpha = 0.7) +
+  
+  # Horizontal cutoff thresholds:
+  geom_hline(aes(yintercept = lab_critical_cutoff, color = "Series lab"),
+             linetype = "solid", alpha = 0.5, size=0.3) +
+  geom_hline(aes(yintercept = seg_critical_cutoff, color = "Series seg"),
+             linetype = "solid", alpha = 0.5, size=0.3) +
+  geom_hline(aes(yintercept = count_critical_cutoff, color = "Series count"),
+             linetype = "solid", alpha = 0.5, size=0.3) +
+  
+  scale_color_manual(values = c("Series lab" = "#FDE725", "Series seg" = "#B59CCC","Series count" = "#1B9E77")) +
+  
+  labs(
+    title = paste0("Segmentation Magnitude with Consensus Events - ",vid[i]),
+    x = "Time (s)",
+    y = "Segmentation Magnitude",
+    color = "Time Series"
+  ) +
+  theme_minimal(base_size = 14)
+
+pdf((paste0("visual/segmag_overlay/",vid[i],".pdf")), width = 14, height = 5, colormodel = "rgb")
+print(p)
+dev.off()
+
+}
+```
