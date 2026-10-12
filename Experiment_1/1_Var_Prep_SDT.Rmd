@@ -1,0 +1,1600 @@
+---
+title: "1_Var_Prep_SDT"
+author: "Zhimeng Li"
+date: "2023-11-08"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+> This script is used to generate the Emotion Segmentation Task metrics Consensus event agreement (CEA)
+
+#Load packages
+```{r,echo=FALSE}
+#Add your packages in the following list
+list.of.packages = c("dplyr","ggplot2", "plyr", "tidyverse", "psych" ,"data.table","readr","Rcpp","brms","bayestestR","emmeans","tidybayes","sjPlot","performance","report")
+new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
+if(length(new.packages) > 0) {install.packages(new.packages)}
+lapply(list.of.packages, require, character.only=T)
+```
+
+#load data
+```{r}
+main_df=read.csv("Processed Data/Level0_output/ES_Language_LowEffortRemoved.csv")
+```
+
+#FULL data
+##Construct CE/NON-CE list
+```{r}
+cea.list=read.csv("Processed Data/Level1_output/full_CEA_Windows.csv")
+cea.list=cea.list[,-c(1,5)]
+cea.list=cea.list %>%
+  mutate(CE_number=1:nrow(cea.list))
+cea.list=cea.list[,c(4,3,1,2)]
+
+movie_list=data.frame(unique(cea.list$video))#Make a reference list of videos
+names(movie_list)[1]="video"
+movie_list$length=c(124,78,68,95,75,112,67,167,92) #+1s to accommodate last second pause
+```
+
+```{r}
+#Construct non-CE events as the interval between two CEs
+nonce.list=list()
+for (i in 1:nrow(movie_list)){
+  temp=cea.list %>% filter(video==movie_list[i,1]) #Select video
+  nonCE=data.frame(matrix(nrow=nrow(temp)+1,ncol=4))
+  names(nonCE)=c("nonCE_number","video","event_start","event_end")
+  nonCE$nonCE_number=c(1:nrow(nonCE))
+  nonCE$video=rep(movie_list[i,1],nrow(nonCE))
+  
+  #The first non-CE event (0 - first CE)
+  nonCE[1,'event_start']=0
+  nonCE[1,'event_end']=temp[1,'event_start']-0.01
+  
+  #The last non-CE event (last CE - end)
+  nonCE[nrow(nonCE),'event_start']=temp[nrow(temp),'event_end']+0.01
+  nonCE[nrow(nonCE),'event_end']=movie_list[i,2]*100
+  
+  for (j in 1:(nrow(temp)-1)){ #Construct the remaining non-CE as intervals between CEs
+    nonCE[j+1,'event_start']=temp[j,'event_end']+0.01
+    nonCE[j+1,'event_end']=temp[j+1,'event_start']-0.01
+  }
+  
+  nonce.list[[i]]=nonCE
+}
+```
+
+```{r}
+nonce.df=rbindlist(nonce.list)
+names(nonce.df)[1]="Type"
+nonce.df$Type=rep("NonCE",nrow(nonce.df)) #Non-CE df
+
+ce.df=cea.list
+names(ce.df)[1]="Type"
+ce.df$Type=rep("CE",nrow(ce.df)) #CE df
+
+sdt.ref=rbind(nonce.df,ce.df)
+sdt.ref=sdt.ref[order(sdt.ref[,c(2,3)])] #Merging CE/non-CE df
+
+#remove non-CEs that are wrongly identified due to consecutive CEs
+sdt.ref=sdt.ref[-c(31,78,121,125,156),]
+
+sdt.ref[30,3]=6638.01 #modify the successive CE to differentiate
+sdt.ref[76,3]=6731.01 
+sdt.ref[121,3]=4613.01
+sdt.ref[151,3]=7405.01
+sdt.ref[152,3]=7588.01
+
+sdt.ref=sdt.ref[-153,]
+
+row.names(sdt.ref) <- NULL
+```
+
+```{r}
+#write.csv(sdt.ref,"Processed Data/Level1_output/full_CE_NONCE_list.csv")
+chisq.test(table(sdt.ref$Type))
+```
+
+##Construct SDT dataframe
+```{r}
+main.df=main_df 
+main.df$timestamp=main.df$timestamp*100
+subjID=unique(main.df$subjectID)
+
+vlist = list() 
+biglist = list()
+```
+
+```{r}
+#Find out the CE identified by each subject
+for (i in 1:length(subjID)){ 
+  d = filter(main.df, subjectID == subjID[i]) #extract all timestamps of subj
+  for (j in 1:nrow(movie_list)){
+    d.d = filter(d,video == movie_list[j,1]) #extract subject [i]'s timestamps and word for emotion video [j]
+    d.d$timestamp=as.numeric(sprintf(d.d$timestamp, fmt = '%#.2f'))
+    d.w = filter(sdt.ref, grepl(movie_list[j,1], video)) #filter critical event and windows relevant for emotion video [j]
+    d.w$event.n = 1:nrow(d.w) #mark the critical events
+    d.w$subjectID=rep(subjID[i],nrow(d.w))
+    d.w$Veracity=if_else(d.w$Type=="NonCE",0,1) #NonCE = 0, CE=1
+    
+    #Locate which CE/non-CE is subject's pause located
+    for (m in 1:nrow(d.d)){
+      mark=which(d.d[m,'timestamp'] >= d.w$event_start & d.d[m,'timestamp'] <= d.w$event_end)
+      d.d[m,'ans_position']=mark
+    }
+    
+    #Record pauses according to positions
+    d.w$Answer=if_else(d.w$event.n %in% d.d$ans_position, 1, 0) #Identified = 1, not = 0
+    d.w$condition=d$condition[1]
+    vlist[[j]] = d.w
+  }
+  biglist[[i]] = vlist
+}
+
+a = do.call(rbind,biglist)
+a = do.call(rbind,a) # 356 subj * 153 CE/NON-CE = 54468 obs
+
+combination_counts <- table(sdt.ref$Type, sdt.ref$video)
+```
+
+```{r}
+#write.csv(a,"Processed Data/Level1_output/full_SDT_all_df.csv")
+```
+
+```{r}
+sdt.data=a[,c(2,6:9)] #Keep only relevant columns
+names(sdt.data)[1]="Stimuli"
+names(sdt.data)[2]="Participant"
+```
+
+```{r}
+write.csv(sdt.data, "Processed Data/Level1_output/full_SDT_dataframe.csv")
+```
+
+
+
+```{r}
+sdt.data=read.csv("Processed Data/Level1_output/full_SDT_dataframe.csv")
+```
+
+
+```{r}
+sdt.data=read.csv("Processed Data/Level1_output/full_SDT_dataframe.csv")
+```
+
+##SDT metrics computation
+###1. Aggregation across all videos                                   
+```{r}
+sdt.agg <- sdt.data %>% 
+  mutate(type = "hit") %>% #hit: pause at CE
+  mutate(type = ifelse(Veracity==1 & Answer==0, "miss", type)) %>% #miss: no pause at CE
+  mutate(type = ifelse(Veracity==0 & Answer==0, "cr", type)) %>%  #cr: no pause at non-CE
+  mutate(type = ifelse(Veracity==0 & Answer==1, "fa", type)) #fa: pause at non-CE
+```
+
+```{r}
+#Aggregate responses across all videos
+sdt.agg.all <- sdt.agg %>% 
+  dplyr::group_by(Participant, type) %>% 
+  dplyr::summarise(count = n()) %>% 
+  spread(type, count)
+sdt.agg.all
+
+subj=unique(sdt.agg %>% select(c("Participant","condition")))
+
+sdt.agg.all=merge(sdt.agg.all,subj,by="Participant")
+
+
+```
+
+```{r}
+#Compute dprime and c from aggregated response
+sdt.agg.all <- sdt.agg.all %>% 
+  mutate(hr = hit / (hit+miss),
+         far = fa / (fa+cr),
+         zhr = qnorm(hr),
+         zfa = qnorm(far),
+         dprime = zhr-zfa,
+         c = -0.5*(zhr+zfa),
+         beta=exp(-0.5*(zhr*zhr-zfa*zfa)),
+         model = "no pooling")
+```
+
+```{r}
+#write.csv(sdt.agg.all,"Processed Data/Level1_output/full_SDT_agg_metrics.csv") 
+```
+
+```{r}
+full.sdt.ref <- (read.csv("Processed Data/Level1_output/full_CE_NONCE_list.csv"))[,-1]
+full.acc <- sdt.agg.all %>%
+  dplyr::select(Participant,cr,hit) %>%
+  mutate(accuracy=(cr+hit)/nrow(full.sdt.ref))
+  
+```
+
+```{r}
+write.csv(full.acc,"Processed Data/Level1_output/full_accuracy.csv")
+```
+
+###2. Aggregation by each video (Loglinear transformation by each video)
+```{r}
+#Aggregate response for each video
+sdt.agg_v <- sdt.agg %>% 
+  dplyr::group_by(Participant, type, Stimuli) %>% 
+  dplyr::summarise(count = n()) %>% 
+  spread(type, count)
+sdt.agg_v 
+
+sdt.agg_v <- left_join(sdt.agg_v, subj, by = "Participant")
+  
+```
+
+```{r}
+#Loglinear transformation is used to address null dprime/c due to extreme value of responses (e.g., when hit/fa = 0). To perform the transformation, we first computed the proportion of signal (i.e. CE) and noise (i.e. non-CE), then for all entries add the former value to the number of hits, and the latter value to the number of false alarms.
+
+#Calculate proportion of CE/non-CE
+ce.proportion <- sdt.ref %>% 
+  dplyr::group_by(video, Type) %>% 
+  dplyr::summarise(count = n()) %>%
+  spread(Type,count) %>%
+  mutate(event_sum=rowSums(.[2:3])) %>%
+  mutate(CE_per=CE/event_sum,NCE_per=NonCE/event_sum)
+```
+
+```{r}
+#For each corresponding entries, add % of CE to number of hit and % of non-CE to number of fa.
+ce.proportion$video=as.character(ce.proportion$video)
+sdt.agg_v_ll=data.frame(sdt.agg_v)
+sdt.agg_v_ll$Stimuli=as.character(sdt.agg_v_ll$Stimuli)
+sdt.agg_v_ll[is.na(sdt.agg_v_ll)]=0
+for (i in 1:nrow(sdt.agg_v_ll)){
+  mark=which(sdt.agg_v_ll[i,'Stimuli']==ce.proportion$video)
+  sdt.agg_v_ll[i,'hit']=sdt.agg_v_ll[i,'hit']+ce.proportion[mark,'CE_per']
+  sdt.agg_v_ll[i,'fa']=sdt.agg_v_ll[i,'fa']+ce.proportion[mark,'NCE_per']
+}
+```
+
+```{r}
+#Compute dprime and c using the transformed responses.
+sdt.agg.v.ll <- sdt.agg_v_ll %>% 
+  mutate(hr = hit / (hit+miss),
+         far = fa / (fa+cr),
+         zhr = qnorm(hr),
+         zfa = qnorm(far),
+         dprime = zhr-zfa,
+         c = -0.5*(zhr+zfa),
+         beta=exp(-0.5*(zhr*zhr-zfa*zfa)),
+         model = "no pooling")
+
+```
+
+```{r}
+#write.csv(sdt.agg.v.ll,"Processed Data/Level1_output/full_LL_SDT_byvideo_metrics.csv") 
+```
+
+###descriptive: response rate
+
+```{r}
+df_summary_by_veracity <- sdt.agg %>%
+    mutate(
+      Stimuli = recode(
+        Stimuli,
+        '645254162' = "twins_reunion",
+        '645248589' = "ER_scene",
+        '645249378' = "doc_patient_chat",
+        '645253441' = "dinner_chat",
+        '645255968' = "campsite_dispute",
+        '645250080' = "girls_chat",
+        '645251074' = "childcare_dispute",
+        '645251954' = "graveside_reunion",
+        '645247244' = "pregnancy_reveal"
+      )) %>%
+  mutate(Veracity = recode(Veracity,
+                           `1` = "CE",
+                           `0` = "NonCE")) 
+
+df_summary_by_veracity_2 <- df_summary_by_veracity %>%
+  dplyr::group_by(Stimuli, Veracity, type,condition) %>%
+  dplyr::summarise(count = n(), .groups = "drop") %>%
+  ungroup()
+
+df_summary_by_veracity_2$count=as.numeric(df_summary_by_veracity_2$count)
+
+df_summary <- df_summary_by_veracity_2 %>%
+  dplyr::group_by(Stimuli, Veracity,,condition) %>%
+  dplyr::summarize(total=sum(count)) 
+
+df_summary_by_veracity_3<-df_summary_by_veracity_2%>%
+  group_by(Stimuli, Veracity,,condition)%>%
+  dplyr::summarise(hit=sum(count[type=="hit"]),miss=sum(count[type=="miss"]),cr=sum(count[type=="cr"]),fa=sum(count[type=="fa"]),.groups="drop")%>%
+  mutate(prop_hit=hit/(hit+miss),prop_miss=miss/(hit+miss),prop_cr=cr/(cr+fa),prop_fa=fa/(cr+fa))
+
+```
+
+```{r}
+df_long <- df_summary_by_veracity_3 %>%
+  pivot_longer(
+    cols = c(hit, miss, cr, fa),
+    names_to = "type",
+    values_to = "count"
+  ) %>%
+  pivot_longer(
+    cols = c(prop_hit, prop_miss, prop_cr, prop_fa),
+    names_to = "prop_type",
+    values_to = "proportion"
+  ) %>%
+  # Keep only matching type and prop_type
+  filter(
+    (type == "hit" & prop_type == "prop_hit") |
+    (type == "miss" & prop_type == "prop_miss") |
+    (type == "cr" & prop_type == "prop_cr") |
+    (type == "fa" & prop_type == "prop_fa")
+  ) %>%
+  select(-prop_type)
+df_long <- na.omit(df_long)
+```
+
+```{r}
+write.csv(df_long,"Processed Data/Level1_output/full_response_proportion_long.csv")
+```
+
+
+```{r}
+
+summary.wide = df_long %>%
+  dplyr::select(Stimuli,type,proportion) %>%
+    mutate(proportion=round(proportion,digits=2)) %>%
+  pivot_wider(names_from = type,
+    values_from = proportion) 
+  
+write.csv(summary.wide,"Processed Data/Level1_output/full_response_proportion.csv")
+```
+
+```{r}
+# Make flextable
+library(flextable)
+ft <- flextable(summary.wide)
+ft <- autofit(ft)  # adjusts column widths
+ft <- set_caption(ft, caption = "Pooled CE - Response proportion")
+
+# Save as Word doc
+library(officer)
+doc <- read_docx()
+doc <- body_add_flextable(doc, value = ft)
+print(doc, target = "visual/full_response_proportion.docx")
+```
+
+```{r}
+pdf("visual/full_proportion.pdf", width = 7, height = 5)
+
+ggplot(df_long,
+       aes(x = Veracity,                # one bar per veracity group
+           y = proportion,
+           fill = type)) +
+  geom_col(width = 0.7, position = "stack") +
+  geom_text(aes(label = round(proportion, 2)),
+            position = position_stack(vjust = 0.5), # centers text in stacks
+            size = 3) +
+  facet_wrap(~Stimuli, scales = "free_y") +
+  theme_minimal(base_size = 14) +
+  labs(
+  title = "Response Proportions by Video and Event Type",
+  subtitle = "Consensus events defined from pooled labeling and no-labeling data",
+  x = "Event type (Consensus / Non-consensus)",
+  y = "Proportion"
+)+
+  theme(
+    strip.text = element_text(face = "bold")
+  )
+
+dev.off()
+```
+
+```{r}
+pdf("visual/full_labgrp_proportion.pdf", width = 7, height = 5)
+
+df_long_sub <- df_long %>% filter(condition=="WithLabel")
+
+ggplot(df_long_sub,
+       aes(x = Veracity,                # one bar per veracity group
+           y = proportion,
+           fill = type)) +
+  geom_col(width = 0.7, position = "stack") +
+  geom_text(aes(label = round(proportion, 2)),
+            position = position_stack(vjust = 0.5), # centers text in stacks
+            size = 3) +
+  facet_wrap(~Stimuli, scales = "free_y") +
+  theme_minimal(base_size = 14) +
+  labs(
+  title = "Response Proportions by Video and Event Type",
+  subtitle = "Consensus events defined from labeling data",
+  x = "Event type (Consensus / Non-consensus)",
+  y = "Proportion"
+) +
+  theme(
+    strip.text = element_text(face = "bold")
+  )
+
+dev.off()
+```
+
+```{r}
+pdf("visual/full_seggrp_proportion.pdf", width = 7, height = 5)
+
+df_long_sub <- df_long %>% filter(condition=="NoLabel")
+
+ggplot(df_long_sub,
+       aes(x = Veracity,                # one bar per veracity group
+           y = proportion,
+           fill = type)) +
+  geom_col(width = 0.7, position = "stack") +
+  geom_text(aes(label = round(proportion, 2)),
+            position = position_stack(vjust = 0.5), # centers text in stacks
+            size = 3) +
+  facet_wrap(~Stimuli, scales = "free_y") +
+  theme_minimal(base_size = 14) +
+  labs(
+  title = "Response Proportions by Video and Event Type",
+  subtitle = "Consensus events defined from no-labeling data",
+  x = "Event type (Consensus / Non-consensus)",
+  y = "Proportion"
+) +
+  theme(
+    strip.text = element_text(face = "bold")
+  )
+
+dev.off()
+```
+
+
+#Optimal deviation (using number of events)
+
+##compute target probability for each video
+
+```{r}
+#using number of CE/nonCE rather than time
+sdt.ref <- read.csv("Processed Data/Level1_output/full_CE_NONCE_list.csv")
+
+#Calculate proportion of CE/non-CE
+ce.proportion <- sdt.ref %>% 
+  dplyr::group_by(video, Type) %>% 
+  dplyr::summarise(count = n()) %>%
+  spread(Type,count)
+ce.proportion$event_sum <- rowSums(ce.proportion[2:3],)
+ce.proportion <- ce.proportion%>%
+  mutate(CE_per=CE/event_sum,NCE_per=NonCE/event_sum)
+
+ce.proportion$video <- as.character(ce.proportion$video)
+
+```
+
+```{r}
+ce.proportion$beta_opt_number <- (ce.proportion$NCE_per/ce.proportion$CE_per)*((1-(-1))/((1-(-1)))) #assuming j/h=1, a/m=-1
+```
+
+```{r}
+write.csv(ce.proportion,"Processed Data/Level1_output/full_opt_beta_bynumber.csv")
+```
+
+
+
+##compute optimal criterion and c for each individual
+
+```{r}
+# time.beta <- duration_wide %>% dplyr::select(video,beta_opt_time)
+# time.beta$video=as.character(time.beta$video)
+number.beta <- ce.proportion %>% dplyr::select(video,beta_opt_number)
+number.beta$video=as.character(number.beta$video)
+opt.beta <- number.beta
+```
+
+```{r}
+sdt.metrics <- (read.csv("Processed Data/Level1_output/full_LL_SDT_byvideo_metrics.csv"))
+
+sdt.metrics.sub <- sdt.metrics %>% dplyr::select(Participant,Stimuli,dprime,c,condition) #select relevant rows
+sdt.metrics.sub <- sdt.metrics.sub %>% dplyr::rename(video = Stimuli)
+sdt.metrics.sub$video <- as.character(sdt.metrics.sub$video)
+sdt.metrics.sub <- left_join(sdt.metrics.sub,opt.beta)
+```
+
+```{r}
+#compute optimal criterion
+# sdt.metrics.sub$criterion_opt_time <- (log(sdt.metrics.sub$beta_opt_time) / sdt.metrics.sub$dprime) + (sdt.metrics.sub$dprime / 2) #using CE time proportion
+
+sdt.metrics.sub$criterion_opt_number <- (log(sdt.metrics.sub$beta_opt_number) / sdt.metrics.sub$dprime) + (sdt.metrics.sub$dprime / 2) #using CE number
+
+#compute optimal c
+
+# sdt.metrics.sub$c_opt_time <- (log(sdt.metrics.sub$beta_opt_time) / sdt.metrics.sub$dprime)  #using CE time proportion
+
+sdt.metrics.sub$c_opt_number <- (log(sdt.metrics.sub$beta_opt_number) / sdt.metrics.sub$dprime)  #using CE number
+
+
+sdt.metrics.sub$c_deviation<- sdt.metrics.sub$c - sdt.metrics.sub$c_opt_number
+```
+
+
+```{r}
+write.csv(sdt.metrics.sub,"Processed Data/Level1_output/full_opt_metrics_byvideo.csv")
+```
+
+```{r}
+ce.proportion=(read.csv("Processed Data/Level1_output/full_opt_beta_bynumber.csv"))[,-1]
+```
+
+```{r}
+ce.proportion <- ce.proportion %>%
+    mutate(
+      video = recode(
+        video,
+        '645254162' = "twinster",
+        '645248589' = "extermis_ER",
+        '645249378' = "extremis_docpatient",
+        '645253441' = "slove_dinner",
+        '645255968' = "unrest",
+        '645250080' = "Found",
+        '645251074' = "mindgap_fight",
+        '645251954' = "mindgap_grave",
+        '645247244' = "ForAkheem"
+      )
+    ) %>%
+    mutate(video = as.factor(video)) 
+
+ce.proportion[,c(5:7)]=round(ce.proportion[,c(5:7)], digits = 2)
+```
+
+
+```{r}
+
+library(flextable)
+library(officer)
+# Make flextable
+ft <- flextable(ce.proportion)
+ft <- autofit(ft)  # adjusts column widths
+ft <- set_caption(ft, caption = "FULL - CE/non-CE proportion")
+ft
+```
+
+```{r}
+
+# Save as Word doc
+doc <- read_docx()
+doc <- body_add_flextable(doc, value = ft)
+print(doc, target = "visual/FULL_cenoce.docx")
+```
+
+```{r}
+ce.proportion.long = ce.proportion %>% pivot_longer(cols=c(CE,NonCE),names_to="Type",values_to="Number")
+
+pdf("visual/FULL_cenoce.pdf", width = 7, height = 5)
+
+ggplot(ce.proportion.long, aes(x = Type, y = Number, fill = Type)) +
+  geom_col(width = 0.7) +
+  geom_text(aes(label = Number), 
+            vjust = 0.5, size = 3) +
+  facet_wrap(~video, scales = "free_y") +
+  theme_minimal(base_size = 14) +
+  labs(title = "FULL - CE/nonCE",
+       x = "Response type",
+       y = "Value") +
+  theme(
+    #legend.position = "none",
+    strip.text = element_text(face = "bold")
+  )
+
+dev.off()
+```
+
+
+
+#within-group robustness check
+#Lab only
+##Construct CE/NON-CE list
+```{r}
+lab.cea.list=read.csv("Processed Data/Level1_output/LAB_CEA_Windows.csv")
+lab.cea.list=lab.cea.list[,-c(1,5)]
+lab.cea.list=lab.cea.list %>%
+  mutate(CE_number=1:nrow(lab.cea.list))
+lab.cea.list=lab.cea.list[,c(4,3,1,2)]
+
+movie_list=data.frame(unique(lab.cea.list$video))#Make a reference list of videos
+names(movie_list)[1]="video"
+movie_list$length=c(124,78,68,95,75,112,67,167,92) #+1s to accommodate last second pause
+```
+
+```{r}
+#Construct non-CE events as the interval between two CEs
+lab.nonce.list=list()
+for (i in 1:nrow(movie_list)){
+  temp=lab.cea.list %>% filter(video==movie_list[i,1]) #Select video
+  nonCE=data.frame(matrix(nrow=nrow(temp)+1,ncol=4))
+  names(nonCE)=c("nonCE_number","video","event_start","event_end")
+  nonCE$nonCE_number=c(1:nrow(nonCE))
+  nonCE$video=rep(movie_list[i,1],nrow(nonCE))
+  
+  #The first non-CE event (0 - first CE)
+  nonCE[1,'event_start']=0
+  nonCE[1,'event_end']=temp[1,'event_start']-0.01
+  
+  #The last non-CE event (last CE - end)
+  nonCE[nrow(nonCE),'event_start']=temp[nrow(temp),'event_end']+0.01
+  nonCE[nrow(nonCE),'event_end']=movie_list[i,2]*100
+  
+  for (j in 1:(nrow(temp)-1)){ #Construct the remaining non-CE as intervals between CEs
+    nonCE[j+1,'event_start']=temp[j,'event_end']+0.01
+    nonCE[j+1,'event_end']=temp[j+1,'event_start']-0.01
+  }
+  
+  lab.nonce.list[[i]]=nonCE
+}
+```
+
+```{r}
+lab.nonce.df=rbindlist(lab.nonce.list)
+names(lab.nonce.df)[1]="Type"
+lab.nonce.df$Type=rep("NonCE",nrow(lab.nonce.df)) #Non-CE df
+
+lab.ce.df=lab.cea.list
+names(lab.ce.df)[1]="Type"
+lab.ce.df$Type=rep("CE",nrow(lab.ce.df)) #CE df
+
+lab.sdt.ref=rbind(lab.nonce.df,lab.ce.df)
+lab.sdt.ref=lab.sdt.ref[order(lab.sdt.ref[,c(2,3)])] #Merging CE/non-CE df
+
+#remove non-CEs that are wrongly identified due to consecutive CEs
+lab.sdt.ref[79,3]=1032.01 #modify the successive CE to differentiate
+lab.sdt.ref=lab.sdt.ref[-80,]
+
+row.names(lab.sdt.ref) <- NULL
+```
+
+```{r}
+#write.csv(lab.sdt.ref,"Processed Data/Level1_output/LAB_CE_NONCE_list.csv")
+```
+
+##Construct SDT dataframe
+```{r}
+lab.main.df=main_df %>% filter(condition=="WithLabel")
+lab.main.df$timestamp=lab.main.df$timestamp*100
+lab.subjID=unique(lab.main.df$subjectID)
+
+vlist = list() 
+biglist = list()
+```
+
+```{r}
+#Find out the CE identified by each subject
+for (i in 1:length(lab.subjID)){ 
+  d = filter(lab.main.df, subjectID == lab.subjID[i]) #extract all timestamps of subj
+  for (j in 1:nrow(movie_list)){
+    d.d = filter(d,video == movie_list[j,1]) #extract subject [i]'s timestamps and word for emotion video [j]
+    d.d$timestamp=as.numeric(sprintf(d.d$timestamp, fmt = '%#.2f'))
+    d.w = filter(lab.sdt.ref, grepl(movie_list[j,1], video)) #filter critical event and windows relevant for emotion video [j]
+    d.w$event.n = 1:nrow(d.w) #mark the critical events
+    d.w$subjectID=rep(lab.subjID[i],nrow(d.w))
+    d.w$Veracity=if_else(d.w$Type=="NonCE",0,1) #NonCE = 0, CE=1
+    
+    #Locate which CE/non-CE is subject's pause located
+    for (m in 1:nrow(d.d)){
+      mark=which(d.d[m,'timestamp'] >= d.w$event_start & d.d[m,'timestamp'] <= d.w$event_end)
+      d.d[m,'ans_position']=mark
+    }
+    
+    #Record pauses according to positions
+    d.w$Answer=if_else(d.w$event.n %in% d.d$ans_position, 1, 0) #Identified = 1, not = 0
+    
+    vlist[[j]] = d.w
+  }
+  biglist[[i]] = vlist
+}
+
+a = do.call(rbind,biglist)
+a = do.call(rbind,a) # 163 subj * 122 CE/NON-CE = 19886 obs
+
+combination_counts <- table(lab.sdt.ref$Type, lab.sdt.ref$video)
+```
+
+```{r}
+#write.csv(a,"Processed Data/Level1_output/LAB_SDT_all_df.csv")
+```
+
+```{r}
+lab.sdt.data=a[,c(2,6:8)] #Keep only relevant columns
+names(lab.sdt.data)[1]="Stimuli"
+names(lab.sdt.data)[2]="Participant"
+```
+
+```{r}
+#write.csv(lab.sdt.data, "Processed Data/Level1_output/LAB_SDT_dataframe.csv")
+```
+
+```{r}
+lab.sdt.data=read.csv("Processed Data/Level1_output/LAB_SDT_dataframe.csv")
+```
+
+##SDT metrics computation
+###1. Aggregation across all videos                                   
+```{r}
+lab.sdt.agg <- lab.sdt.data %>% 
+  mutate(type = "hit") %>% #hit: pause at CE
+  mutate(type = ifelse(Veracity==1 & Answer==0, "miss", type)) %>% #miss: no pause at CE
+  mutate(type = ifelse(Veracity==0 & Answer==0, "cr", type)) %>%  #cr: no pause at non-CE
+  mutate(type = ifelse(Veracity==0 & Answer==1, "fa", type)) #fa: pause at non-CE
+```
+
+```{r}
+#Aggregate responses across all videos
+lab.sdt.agg.all <- lab.sdt.agg %>% 
+  dplyr::group_by(Participant, type) %>% 
+  dplyr::summarise(count = n()) %>% 
+  spread(type, count)
+lab.sdt.agg.all
+```
+
+```{r}
+#Compute dprime and c from aggregated response
+lab.sdt.agg.all <- lab.sdt.agg.all %>% 
+  mutate(hr = hit / (hit+miss),
+         far = fa / (fa+cr),
+         zhr = qnorm(hr),
+         zfa = qnorm(far),
+         dprime = zhr-zfa,
+         c = -0.5*(zhr+zfa),
+         beta=exp(-0.5*(zhr*zhr-zfa*zfa)),
+         model = "no pooling")
+lab.sdt.agg.all$condition="WithLabel"
+```
+
+```{r}
+#write.csv(lab.sdt.agg.all,"Processed Data/Level1_output/LAB_SDT_agg_metrics.csv") 
+```
+
+```{r}
+lab.sdt.ref <- (read.csv("Processed Data/Level1_output/lab_CE_NONCE_list.csv"))[,-1]
+lab.acc <- lab.sdt.agg.all %>%
+  dplyr::select(Participant,cr,hit) %>%
+  mutate(accuracy=(cr+hit)/nrow(lab.sdt.ref))
+  
+```
+
+```{r}
+write.csv(lab.acc,"Processed Data/Level1_output/lab_accuracy.csv")
+```
+
+```{r}
+#Compute dprime and c from aggregated response
+lab.sdt.agg.all <- lab.sdt.agg.all %>% 
+  mutate(hr = hit / (hit+miss),
+         far = fa / (fa+cr),
+         zhr = qnorm(hr),
+         zfa = qnorm(far),
+         dprime = zhr-zfa,
+         c = -0.5*(zhr+zfa),
+         beta=exp(-0.5*(zhr*zhr-zfa*zfa)),
+         model = "no pooling")
+lab.sdt.agg.all$condition="WithLabel"
+```
+
+```{r}
+write.csv(lab.sdt.agg.all,"Processed Data/Level1_output/LAB_SDT_agg_metrics.csv") 
+```
+
+
+###2. Aggregation by each video (Loglinear transformation by each video)
+```{r}
+#Aggregate response for each video
+lab.sdt.agg_v <- lab.sdt.agg %>% 
+  dplyr::group_by(Participant, type, Stimuli) %>% 
+  dplyr::summarise(count = n()) %>% 
+  spread(type, count)
+lab.sdt.agg_v 
+```
+
+```{r}
+#Loglinear transformation is used to address null dprime/c due to extreme value of responses (e.g., when hit/fa = 0). To perform the transformation, we first computed the proportion of signal (i.e. CE) and noise (i.e. non-CE), then for all entries add the former value to the number of hits, and the latter value to the number of false alarms.
+
+#Calculate proportion of CE/non-CE
+lab.ce.proportion <- lab.sdt.ref %>% 
+  dplyr::group_by(video, Type) %>% 
+  dplyr::summarise(count = n()) %>%
+  spread(Type,count) %>%
+  mutate(event_sum=rowSums(.[2:3])) %>%
+  mutate(CE_per=CE/event_sum,NCE_per=NonCE/event_sum)
+```
+
+```{r}
+#For each corresponding entries, add % of CE to number of hit and % of non-CE to number of fa.
+lab.ce.proportion$video=as.character(lab.ce.proportion$video)
+lab.sdt.agg_v_ll=data.frame(lab.sdt.agg_v)
+lab.sdt.agg_v_ll$Stimuli=as.character(lab.sdt.agg_v_ll$Stimuli)
+lab.sdt.agg_v_ll[is.na(lab.sdt.agg_v_ll)]=0
+for (i in 1:nrow(lab.sdt.agg_v_ll)){
+  mark=which(lab.sdt.agg_v_ll[i,'Stimuli']==lab.ce.proportion$video)
+  lab.sdt.agg_v_ll[i,'hit']=lab.sdt.agg_v_ll[i,'hit']+lab.ce.proportion[mark,'CE_per']
+  lab.sdt.agg_v_ll[i,'fa']=lab.sdt.agg_v_ll[i,'fa']+lab.ce.proportion[mark,'NCE_per']
+}
+```
+
+```{r}
+#Compute dprime and c using the transformed responses.
+lab.sdt.agg.v.ll <- lab.sdt.agg_v_ll %>% 
+  mutate(hr = hit / (hit+miss),
+         far = fa / (fa+cr),
+         zhr = qnorm(hr),
+         zfa = qnorm(far),
+         dprime = zhr-zfa,
+         c = -0.5*(zhr+zfa),
+         beta=exp(-0.5*(zhr*zhr-zfa*zfa)),
+         model = "no pooling")
+```
+
+```{r}
+#write.csv(lab.sdt.agg.v.ll,"Processed Data/Level1_output/LAB_LL_SDT_byvideo_metrics.csv") 
+```
+
+###descriptive: response rate
+```{r}
+df_summary_by_veracity <- lab.sdt.agg %>%
+    mutate(
+      Stimuli = recode(
+        Stimuli,
+        '645254162' = "twins_reunion",
+        '645248589' = "ER_scene",
+        '645249378' = "doc_patient_chat",
+        '645253441' = "dinner_chat",
+        '645255968' = "campsite_dispute",
+        '645250080' = "girls_chat",
+        '645251074' = "childcare_dispute",
+        '645251954' = "graveside_reunion",
+        '645247244' = "pregnancy_reveal"
+      )) %>%
+  mutate(Veracity = recode(Veracity,
+                           `1` = "CE",
+                           `0` = "NonCE")) 
+
+df_summary_by_veracity_2 <- df_summary_by_veracity %>%
+  dplyr::group_by(Stimuli, Veracity, type) %>%
+  dplyr::summarise(count = n(), .groups = "drop") %>%
+  ungroup()
+
+df_summary_by_veracity_2$count=as.numeric(df_summary_by_veracity_2$count)
+
+df_summary <- df_summary_by_veracity_2 %>%
+  dplyr::group_by(Stimuli, Veracity) %>%
+  dplyr::summarize(total=sum(count)) 
+
+df_summary_by_veracity_3<-df_summary_by_veracity_2%>%
+  group_by(Stimuli, Veracity)%>%
+  dplyr::summarise(hit=sum(count[type=="hit"]),miss=sum(count[type=="miss"]),cr=sum(count[type=="cr"]),fa=sum(count[type=="fa"]),.groups="drop")%>%
+  mutate(prop_hit=hit/(hit+miss),prop_miss=miss/(hit+miss),prop_cr=cr/(cr+fa),prop_fa=fa/(cr+fa))
+
+```
+
+```{r}
+df_long <- df_summary_by_veracity_3 %>%
+  pivot_longer(
+    cols = c(hit, miss, cr, fa),
+    names_to = "type",
+    values_to = "count"
+  ) %>%
+  pivot_longer(
+    cols = c(prop_hit, prop_miss, prop_cr, prop_fa),
+    names_to = "prop_type",
+    values_to = "proportion"
+  ) %>%
+  # Keep only matching type and prop_type
+  filter(
+    (type == "hit" & prop_type == "prop_hit") |
+    (type == "miss" & prop_type == "prop_miss") |
+    (type == "cr" & prop_type == "prop_cr") |
+    (type == "fa" & prop_type == "prop_fa")
+  ) %>%
+  select(-prop_type)
+df_long <- na.omit(df_long)
+```
+
+```{r}
+write.csv(df_long,"Processed Data/Level1_output/lab_response_proportion_long.csv")
+```
+
+
+```{r}
+
+summary.wide = df_long %>%
+  dplyr::select(Stimuli,type,proportion) %>%
+    mutate(proportion=round(proportion,digits=2)) %>%
+  pivot_wider(names_from = type,
+    values_from = proportion) 
+  
+write.csv(summary.wide,"Processed Data/Level1_output/lab_response_proportion.csv")
+```
+
+```{r}
+# Make flextable
+library(flextable)
+ft <- flextable(summary.wide)
+ft <- autofit(ft)  # adjusts column widths
+ft <- set_caption(ft, caption = "Labeling - Response proportion")
+
+# Save as Word doc
+library(officer)
+doc <- read_docx()
+doc <- body_add_flextable(doc, value = ft)
+print(doc, target = "visual/lab_response_proportion.docx")
+```
+
+```{r}
+pdf("visual/lab_proportion.pdf", width = 7, height = 5)
+
+ggplot(df_long,
+       aes(x = Veracity,                # one bar per veracity group
+           y = proportion,
+           fill = type)) +
+  geom_col(width = 0.7, position = "stack") +
+  geom_text(aes(label = round(proportion, 2)),
+            position = position_stack(vjust = 0.5), # centers text in stacks
+            size = 3) +
+  facet_wrap(~Stimuli, scales = "free_y") +
+  theme_minimal(base_size = 14) +
+  labs(
+  title = "Response Proportions by Video and Event Type",
+  subtitle = "Consensus events defined from labeling data",
+  x = "Event type (Consensus / Non-consensus)",
+  y = "Proportion"
+) +
+  theme(
+    strip.text = element_text(face = "bold")
+  )
+
+dev.off()
+```
+
+#Seg only
+##Construct CE/NON-CE list
+```{r}
+seg.cea.list=read.csv("Processed Data/Level1_output/SEG_CEA_Windows.csv")
+seg.cea.list=seg.cea.list[,-c(1,5)]
+seg.cea.list=seg.cea.list %>%
+  mutate(CE_number=1:nrow(seg.cea.list))
+seg.cea.list=seg.cea.list[,c(4,3,1,2)]
+
+movie_list=data.frame(unique(seg.cea.list$video))#Make a reference list of videos
+names(movie_list)[1]="video"
+movie_list$length=c(124,78,68,95,75,112,67,167,92) #+1s to accommodate last second pause
+```
+
+```{r}
+#Construct non-CE events as the interval between two CEs
+seg.nonce.list=list()
+for (i in 1:nrow(movie_list)){
+  temp=seg.cea.list %>% filter(video==movie_list[i,1]) #Select video
+  nonCE=data.frame(matrix(nrow=nrow(temp)+1,ncol=4))
+  names(nonCE)=c("nonCE_number","video","event_start","event_end")
+  nonCE$nonCE_number=c(1:nrow(nonCE))
+  nonCE$video=rep(movie_list[i,1],nrow(nonCE))
+  
+  #The first non-CE event (0 - first CE)
+  nonCE[1,'event_start']=0
+  nonCE[1,'event_end']=temp[1,'event_start']-0.01
+  
+  #The last non-CE event (last CE - end)
+  nonCE[nrow(nonCE),'event_start']=temp[nrow(temp),'event_end']+0.01
+  nonCE[nrow(nonCE),'event_end']=movie_list[i,2]*100
+  
+  for (j in 1:(nrow(temp)-1)){ #Construct the remaining non-CE as intervals between CEs
+    nonCE[j+1,'event_start']=temp[j,'event_end']+0.01
+    nonCE[j+1,'event_end']=temp[j+1,'event_start']-0.01
+  }
+  
+  seg.nonce.list[[i]]=nonCE
+}
+```
+
+```{r}
+seg.nonce.df=rbindlist(seg.nonce.list)
+names(seg.nonce.df)[1]="Type"
+seg.nonce.df$Type=rep("NonCE",nrow(seg.nonce.df)) #Non-CE df
+
+seg.ce.df=seg.cea.list
+names(seg.ce.df)[1]="Type"
+seg.ce.df$Type=rep("CE",nrow(seg.ce.df)) #CE df
+
+seg.sdt.ref=rbind(seg.nonce.df,seg.ce.df)
+seg.sdt.ref=seg.sdt.ref[order(seg.sdt.ref[,c(2,3)])] #Merging CE/non-CE df
+
+#remove non-CEs that are wrongly identified due to consecutive CEs
+seg.sdt.ref[32,3]=6644.01 #modify the successive CE to differentiate from the prior one
+seg.sdt.ref[134,3]=4597.01
+seg.sdt.ref[163,3]=3769.01
+seg.sdt.ref[171,3]=7398.01
+seg.sdt.ref=seg.sdt.ref[-c(33,135,164,172),]
+row.names(seg.sdt.ref) <- NULL
+```
+
+```{r}
+#write.csv(seg.sdt.ref,"Processed Data/Level1_output/seg_CE_NONCE_list.csv")
+```
+
+##Construct SDT dataframe
+```{r}
+seg.main.df=main_df %>% filter(condition=="NoLabel")
+seg.main.df$timestamp=seg.main.df$timestamp*100
+seg.subjID=unique(seg.main.df$subjectID)
+
+vlist = list() 
+biglist = list()
+```
+
+```{r}
+#Find out the CE identified by each subject
+for (i in 1:length(seg.subjID)){ 
+  d = filter(seg.main.df, subjectID == seg.subjID[i]) #extract all timestamps of subj
+  for (j in 1:nrow(movie_list)){
+    d.d = filter(d,video == movie_list[j,1]) #extract subject [i]'s timestamps and word for emotion video [j]
+    d.d$timestamp=as.numeric(sprintf(d.d$timestamp, fmt = '%#.2f'))
+    d.w = filter(seg.sdt.ref, grepl(movie_list[j,1], video)) #filter critical event and windows relevant for emotion video [j]
+    d.w$event.n = 1:nrow(d.w) #mark the critical events
+    d.w$subjectID=rep(seg.subjID[i],nrow(d.w))
+    d.w$Veracity=if_else(d.w$Type=="NonCE",0,1) #NonCE = 0, CE=1
+    
+    #Locate which CE/non-CE is subject's pause located
+    for (m in 1:nrow(d.d)){
+      mark=which(d.d[m,'timestamp'] >= d.w$event_start & d.d[m,'timestamp'] <= d.w$event_end)
+      d.d[m,'ans_position']=mark
+    }
+    
+    #Record pauses according to positions
+    d.w$Answer=if_else(d.w$event.n %in% d.d$ans_position, 1, 0) #Identified = 1, not = 0
+    
+    vlist[[j]] = d.w
+  }
+  biglist[[i]] = vlist
+}
+
+a = do.call(rbind,biglist)
+a = do.call(rbind,a) # 193 subj * 169 CE/NON-CE = 32617 obs
+
+combination_counts <- table(seg.sdt.ref$Type, seg.sdt.ref$video)
+```
+
+```{r}
+#write.csv(a,"Processed Data/Level1_output/SEG_SDT_all_df.csv")
+```
+
+```{r}
+seg.sdt.data=a[,c(2,6:8)] #Keep only relevant columns
+names(seg.sdt.data)[1]="Stimuli"
+names(seg.sdt.data)[2]="Participant"
+```
+
+```{r}
+#write.csv(seg.sdt.data, "Processed Data/Level1_output/SEG_SDT_dataframe.csv")
+```
+
+```{r}
+seg.sdt.data=read.csv("Processed Data/Level1_output/SEG_SDT_dataframe.csv")
+```
+
+##SDT metrics computation
+###1. Aggregation across all videos                                   
+```{r}
+seg.sdt.agg <- seg.sdt.data %>% 
+  mutate(type = "hit") %>% #hit: pause at CE
+  mutate(type = ifelse(Veracity==1 & Answer==0, "miss", type)) %>% #miss: no pause at CE
+  mutate(type = ifelse(Veracity==0 & Answer==0, "cr", type)) %>%  #cr: no pause at non-CE
+  mutate(type = ifelse(Veracity==0 & Answer==1, "fa", type)) #fa: pause at non-CE
+```
+
+```{r}
+#Aggregate responses across all videos
+seg.sdt.agg.all <- seg.sdt.agg %>% 
+  dplyr::group_by(Participant, type) %>% 
+  dplyr::summarise(count = n()) %>% 
+  spread(type, count)
+seg.sdt.agg.all
+```
+
+```{r}
+#Compute dprime and c from aggregated response
+seg.sdt.agg.all <- seg.sdt.agg.all %>% 
+  mutate(hr = hit / (hit+miss),
+         far = fa / (fa+cr),
+         zhr = qnorm(hr),
+         zfa = qnorm(far),
+         dprime = zhr-zfa,
+         c = -0.5*(zhr+zfa),
+         beta=exp(-0.5*(zhr*zhr-zfa*zfa)),
+         model = "no pooling")
+seg.sdt.agg.all$condition="NoLabel"
+```
+
+```{r}
+#write.csv(seg.sdt.agg.all,"Processed Data/Level1_output/SEG_SDT_agg_metrics.csv") 
+```
+
+```{r}
+seg.sdt.ref <- (read.csv("Processed Data/Level1_output/seg_CE_NONCE_list.csv"))[,-1]
+seg.acc <- seg.sdt.agg.all %>%
+  dplyr::select(Participant,cr,hit) %>%
+  mutate(accuracy=(cr+hit)/nrow(seg.sdt.ref))
+  
+```
+
+```{r}
+write.csv(seg.acc,"Processed Data/Level1_output/seg_accuracy.csv")
+```
+
+```{r}
+#Compute dprime and c from aggregated response
+seg.sdt.agg.all <- seg.sdt.agg.all %>% 
+  mutate(hr = hit / (hit+miss),
+         far = fa / (fa+cr),
+         zhr = qnorm(hr),
+         zfa = qnorm(far),
+         dprime = zhr-zfa,
+         c = -0.5*(zhr+zfa),
+         beta=exp(-0.5*(zhr*zhr-zfa*zfa)),
+         model = "no pooling")
+seg.sdt.agg.all$condition="NoLabel"
+```
+
+```{r}
+write.csv(seg.sdt.agg.all,"Processed Data/Level1_output/SEG_SDT_agg_metrics.csv") 
+```
+
+
+###2. Aggregation by each video (Loglinear transformation by each video)
+```{r}
+#Aggregate response for each video
+seg.sdt.agg_v <- seg.sdt.agg %>% 
+  dplyr::group_by(Participant, type, Stimuli) %>% 
+  dplyr::summarise(count = n()) %>% 
+  spread(type, count)
+seg.sdt.agg_v 
+```
+
+```{r}
+#Loglinear transformation is used to address null dprime/c due to extreme value of responses (e.g., when hit/fa = 0). To perform the transformation, we first computed the proportion of signal (i.e. CE) and noise (i.e. non-CE), then for all entries add the former value to the number of hits, and the latter value to the number of false alarms.
+
+#Calculate proportion of CE/non-CE
+seg.ce.proportion <- seg.sdt.ref %>% 
+  dplyr::group_by(video, Type) %>% 
+  dplyr::summarise(count = n()) %>%
+  spread(Type,count) %>%
+  mutate(event_sum=rowSums(.[2:3])) %>%
+  mutate(CE_per=CE/event_sum,NCE_per=NonCE/event_sum)
+```
+
+```{r}
+#For each corresponding entries, add % of CE to number of hit and % of non-CE to number of fa.
+seg.ce.proportion$video=as.character(seg.ce.proportion$video)
+seg.sdt.agg_v_ll=data.frame(seg.sdt.agg_v)
+seg.sdt.agg_v_ll$Stimuli=as.character(seg.sdt.agg_v_ll$Stimuli)
+seg.sdt.agg_v_ll[is.na(seg.sdt.agg_v_ll)]=0
+for (i in 1:nrow(seg.sdt.agg_v_ll)){
+  mark=which(seg.sdt.agg_v_ll[i,'Stimuli']==seg.ce.proportion$video)
+  seg.sdt.agg_v_ll[i,'hit']=seg.sdt.agg_v_ll[i,'hit']+seg.ce.proportion[mark,'CE_per']
+  seg.sdt.agg_v_ll[i,'fa']=seg.sdt.agg_v_ll[i,'fa']+seg.ce.proportion[mark,'NCE_per']
+}
+```
+
+```{r}
+#Compute dprime and c using the transformed responses.
+seg.sdt.agg.v.ll <- seg.sdt.agg_v_ll %>% 
+  mutate(hr = hit / (hit+miss),
+         far = fa / (fa+cr),
+         zhr = qnorm(hr),
+         zfa = qnorm(far),
+         dprime = zhr-zfa,
+         c = -0.5*(zhr+zfa),
+         beta=exp(-0.5*(zhr*zhr-zfa*zfa)),
+         model = "no pooling")
+seg.sdt.agg.v.ll$condition="NoLabel"
+
+```
+
+```{r}
+#write.csv(seg.sdt.agg.v.ll,"Processed Data/Level1_output/SEG_LL_SDT_byvideo_metrics.csv") 
+```
+
+###descriptive: response rate
+```{r}
+df_summary_by_veracity <- seg.sdt.agg %>%
+    mutate(
+      Stimuli = recode(
+        Stimuli,
+        '645254162' = "twins_reunion",
+        '645248589' = "ER_scene",
+        '645249378' = "doc_patient_chat",
+        '645253441' = "dinner_chat",
+        '645255968' = "campsite_dispute",
+        '645250080' = "girls_chat",
+        '645251074' = "childcare_dispute",
+        '645251954' = "graveside_reunion",
+        '645247244' = "pregnancy_reveal"
+      )) %>%
+  mutate(Veracity = recode(Veracity,
+                           `1` = "CE",
+                           `0` = "NonCE")) 
+
+df_summary_by_veracity_2 <- df_summary_by_veracity %>%
+  dplyr::group_by(Stimuli, Veracity, type) %>%
+  dplyr::summarise(count = n(), .groups = "drop") %>%
+  ungroup()
+
+df_summary_by_veracity_2$count=as.numeric(df_summary_by_veracity_2$count)
+
+df_summary <- df_summary_by_veracity_2 %>%
+  dplyr::group_by(Stimuli, Veracity) %>%
+  dplyr::summarize(total=sum(count)) 
+
+df_summary_by_veracity_3<-df_summary_by_veracity_2%>%
+  group_by(Stimuli, Veracity)%>%
+  dplyr::summarise(hit=sum(count[type=="hit"]),miss=sum(count[type=="miss"]),cr=sum(count[type=="cr"]),fa=sum(count[type=="fa"]),.groups="drop")%>%
+  mutate(prop_hit=hit/(hit+miss),prop_miss=miss/(hit+miss),prop_cr=cr/(cr+fa),prop_fa=fa/(cr+fa))
+
+```
+
+```{r}
+df_long <- df_summary_by_veracity_3 %>%
+  pivot_longer(
+    cols = c(hit, miss, cr, fa),
+    names_to = "type",
+    values_to = "count"
+  ) %>%
+  pivot_longer(
+    cols = c(prop_hit, prop_miss, prop_cr, prop_fa),
+    names_to = "prop_type",
+    values_to = "proportion"
+  ) %>%
+  # Keep only matching type and prop_type
+  filter(
+    (type == "hit" & prop_type == "prop_hit") |
+    (type == "miss" & prop_type == "prop_miss") |
+    (type == "cr" & prop_type == "prop_cr") |
+    (type == "fa" & prop_type == "prop_fa")
+  ) %>%
+  select(-prop_type)
+df_long <- na.omit(df_long)
+```
+
+```{r}
+write.csv(df_long,"Processed Data/Level1_output/seg_response_proportion_long.csv")
+```
+
+
+```{r}
+
+summary.wide = df_long %>%
+  dplyr::select(Stimuli,type,proportion) %>%
+    mutate(proportion=round(proportion,digits=2)) %>%
+  pivot_wider(names_from = type,
+    values_from = proportion) 
+  
+write.csv(summary.wide,"Processed Data/Level1_output/seg_response_proportion.csv")
+```
+
+```{r}
+# Make flextable
+library(flextable)
+ft <- flextable(summary.wide)
+ft <- autofit(ft)  # adjusts column widths
+ft <- set_caption(ft, caption = "No Label - Response proportion")
+
+# Save as Word doc
+library(officer)
+doc <- read_docx()
+doc <- body_add_flextable(doc, value = ft)
+print(doc, target = "visual/seg_response_proportion.docx")
+```
+
+```{r}
+pdf("visual/seg_proportion.pdf", width = 7, height = 5)
+
+ggplot(df_long,
+       aes(x = Veracity,                # one bar per veracity group
+           y = proportion,
+           fill = type)) +
+  geom_col(width = 0.7, position = "stack") +
+  geom_text(aes(label = round(proportion, 2)),
+            position = position_stack(vjust = 0.5), # centers text in stacks
+            size = 3) +
+  facet_wrap(~Stimuli, scales = "free_y") +
+  theme_minimal(base_size = 14) +
+  labs(
+  title = "Response Proportions by Video and Event Type",
+  subtitle = "Consensus events defined from no-labeling data",
+  x = "Event type (Consensus / Non-consensus)",
+  y = "Proportion"
+)  +
+  theme(
+    strip.text = element_text(face = "bold")
+  )
+
+dev.off()
+```
+
+
+#Optimal deviation (using number of events)
+
+#labeling
+##compute target probability for each video
+
+```{r}
+#using number of CE/nonCE rather than time
+sdt.ref <- read.csv("Processed Data/Level1_output/lab_CE_NONCE_list.csv")
+
+#Calculate proportion of CE/non-CE
+ce.proportion <- sdt.ref %>% 
+  dplyr::group_by(video, Type) %>% 
+  dplyr::summarise(count = n()) %>%
+  spread(Type,count)
+ce.proportion$event_sum <- rowSums(ce.proportion[2:3],)
+ce.proportion <- ce.proportion%>%
+  mutate(CE_per=CE/event_sum,NCE_per=NonCE/event_sum)
+
+ce.proportion$video <- as.character(ce.proportion$video)
+
+```
+
+```{r}
+ce.proportion$beta_opt_number <- (ce.proportion$NCE_per/ce.proportion$CE_per)*((1-(-1))/((1-(-1)))) #assuming j/h=1, a/m=-1
+```
+
+```{r}
+write.csv(ce.proportion,"Processed Data/Level1_output/lab_opt_beta_bynumber.csv")
+```
+
+
+
+##compute optimal criterion and c for each individual
+
+```{r}
+# time.beta <- duration_wide %>% dplyr::select(video,beta_opt_time)
+# time.beta$video=as.character(time.beta$video)
+number.beta <- ce.proportion %>% dplyr::select(video,beta_opt_number)
+number.beta$video=as.character(number.beta$video)
+opt.beta <- number.beta
+```
+
+```{r}
+sdt.metrics <- (read.csv("Processed Data/Level1_output/lab_LL_SDT_byvideo_metrics.csv"))
+
+sdt.metrics.sub <- sdt.metrics %>% dplyr::select(Participant,Stimuli,dprime,c) #select relevant rows
+sdt.metrics.sub <- sdt.metrics.sub %>% dplyr::rename(video = Stimuli)
+sdt.metrics.sub$video <- as.character(sdt.metrics.sub$video)
+sdt.metrics.sub <- left_join(sdt.metrics.sub,opt.beta)
+```
+
+```{r}
+#compute optimal criterion
+# sdt.metrics.sub$criterion_opt_time <- (log(sdt.metrics.sub$beta_opt_time) / sdt.metrics.sub$dprime) + (sdt.metrics.sub$dprime / 2) #using CE time proportion
+
+sdt.metrics.sub$criterion_opt_number <- (log(sdt.metrics.sub$beta_opt_number) / sdt.metrics.sub$dprime) + (sdt.metrics.sub$dprime / 2) #using CE number
+
+#compute optimal c
+
+# sdt.metrics.sub$c_opt_time <- (log(sdt.metrics.sub$beta_opt_time) / sdt.metrics.sub$dprime)  #using CE time proportion
+
+sdt.metrics.sub$c_opt_number <- (log(sdt.metrics.sub$beta_opt_number) / sdt.metrics.sub$dprime)  #using CE number
+
+
+sdt.metrics.sub$c_deviation<- sdt.metrics.sub$c - sdt.metrics.sub$c_opt_number
+```
+
+
+```{r}
+sdt.metrics.sub$condition="WithLabel"
+write.csv(sdt.metrics.sub,"Processed Data/Level1_output/lab_opt_metrics_byvideo.csv")
+```
+
+```{r}
+ce.proportion=(read.csv("Processed Data/Level1_output/lab_opt_beta_bynumber.csv"))[,-1]
+```
+
+```{r}
+ce.proportion <- ce.proportion %>%
+    mutate(
+      video = recode(
+        video,
+        '645254162' = "twinster",
+        '645248589' = "extermis_ER",
+        '645249378' = "extremis_docpatient",
+        '645253441' = "slove_dinner",
+        '645255968' = "unrest",
+        '645250080' = "Found",
+        '645251074' = "mindgap_fight",
+        '645251954' = "mindgap_grave",
+        '645247244' = "ForAkheem"
+      )
+    ) %>%
+    mutate(video = as.factor(video)) 
+
+ce.proportion[,c(5:7)]=round(ce.proportion[,c(5:7)], digits = 2)
+```
+
+
+```{r}
+
+library(flextable)
+library(officer)
+# Make flextable
+ft <- flextable(ce.proportion)
+ft <- autofit(ft)  # adjusts column widths
+ft <- set_caption(ft, caption = "Labeling - CE/non-CE proportion")
+ft
+```
+
+```{r}
+
+# Save as Word doc
+doc <- read_docx()
+doc <- body_add_flextable(doc, value = ft)
+print(doc, target = "visual/lab_cenoce.docx")
+```
+
+```{r}
+ce.proportion.long = ce.proportion %>% pivot_longer(cols=c(CE,NonCE),names_to="Type",values_to="Number")
+
+pdf("visual/labeling_cenoce.pdf", width = 7, height = 5)
+
+ggplot(ce.proportion.long, aes(x = Type, y = Number, fill = Type)) +
+  geom_col(width = 0.7) +
+  geom_text(aes(label = Number), 
+            vjust = 0.5, size = 3) +
+  facet_wrap(~video, scales = "free_y") +
+  theme_minimal(base_size = 14) +
+  labs(title = "Labeing - CE/nonCE",
+       x = "Response type",
+       y = "Value") +
+  theme(
+    #legend.position = "none",
+    strip.text = element_text(face = "bold")
+  )
+
+dev.off()
+```
+
+
+#segonly
+##compute target probability for each video
+
+```{r}
+#using number of CE/nonCE rather than time
+sdt.ref <- read.csv("Processed Data/Level1_output/seg_CE_NONCE_list.csv")
+
+#Calculate proportion of CE/non-CE
+ce.proportion <- sdt.ref %>% 
+  dplyr::group_by(video, Type) %>% 
+  dplyr::summarise(count = n()) %>%
+  spread(Type,count)
+ce.proportion$event_sum <- rowSums(ce.proportion[2:3],)
+ce.proportion <- ce.proportion%>%
+  mutate(CE_per=CE/event_sum,NCE_per=NonCE/event_sum)
+
+ce.proportion$video <- as.character(ce.proportion$video)
+
+```
+
+```{r}
+ce.proportion$beta_opt_number <- (ce.proportion$NCE_per/ce.proportion$CE_per)*((1-(-1))/((1-(-1)))) #assuming j/h=1, a/m=-1
+```
+
+```{r}
+write.csv(ce.proportion,"Processed Data/Level1_output/seg_opt_beta_bynumber.csv")
+```
+
+
+
+##compute optimal criterion and c for each individual
+
+```{r}
+# time.beta <- duration_wide %>% dplyr::select(video,beta_opt_time)
+# time.beta$video=as.character(time.beta$video)
+number.beta <- ce.proportion %>% dplyr::select(video,beta_opt_number)
+number.beta$video=as.character(number.beta$video)
+opt.beta <- number.beta
+```
+
+```{r}
+sdt.metrics <- (read.csv("Processed Data/Level1_output/seg_LL_SDT_byvideo_metrics.csv"))
+
+sdt.metrics.sub <- sdt.metrics %>% dplyr::select(Participant,Stimuli,dprime,c) #select relevant rows
+sdt.metrics.sub <- sdt.metrics.sub %>% dplyr::rename(video = Stimuli)
+sdt.metrics.sub$video <- as.character(sdt.metrics.sub$video)
+sdt.metrics.sub <- left_join(sdt.metrics.sub,opt.beta)
+```
+
+```{r}
+#compute optimal criterion
+# sdt.metrics.sub$criterion_opt_time <- (log(sdt.metrics.sub$beta_opt_time) / sdt.metrics.sub$dprime) + (sdt.metrics.sub$dprime / 2) #using CE time proportion
+
+sdt.metrics.sub$criterion_opt_number <- (log(sdt.metrics.sub$beta_opt_number) / sdt.metrics.sub$dprime) + (sdt.metrics.sub$dprime / 2) #using CE number
+
+#compute optimal c
+
+# sdt.metrics.sub$c_opt_time <- (log(sdt.metrics.sub$beta_opt_time) / sdt.metrics.sub$dprime)  #using CE time proportion
+
+sdt.metrics.sub$c_opt_number <- (log(sdt.metrics.sub$beta_opt_number) / sdt.metrics.sub$dprime)  #using CE number
+
+
+sdt.metrics.sub$c_deviation<- sdt.metrics.sub$c - sdt.metrics.sub$c_opt_number
+```
+
+
+```{r}
+sdt.metrics.sub$condition="NoLabel"
+write.csv(sdt.metrics.sub,"Processed Data/Level1_output/seg_opt_metrics_byvideo.csv")
+```
+
+```{r}
+ce.proportion=(read.csv("Processed Data/Level1_output/seg_opt_beta_bynumber.csv"))[,-1]
+```
+
+```{r}
+ce.proportion <- ce.proportion %>%
+    mutate(
+      video = recode(
+        video,
+        '645254162' = "twinster",
+        '645248589' = "extermis_ER",
+        '645249378' = "extremis_docpatient",
+        '645253441' = "slove_dinner",
+        '645255968' = "unrest",
+        '645250080' = "Found",
+        '645251074' = "mindgap_fight",
+        '645251954' = "mindgap_grave",
+        '645247244' = "ForAkheem"
+      )
+    ) %>%
+    mutate(video = as.factor(video)) 
+
+ce.proportion[,c(5:7)]=round(ce.proportion[,c(5:7)], digits = 2)
+```
+
+
+```{r}
+
+library(flextable)
+library(officer)
+# Make flextable
+ft <- flextable(ce.proportion)
+ft <- autofit(ft)  # adjusts column widths
+ft <- set_caption(ft, caption = "NoLabel - CE/non-CE proportion")
+ft
+```
+
+```{r}
+
+# Save as Word doc
+doc <- read_docx()
+doc <- body_add_flextable(doc, value = ft)
+print(doc, target = "visual/seg_cenoce.docx")
+```
+
+```{r}
+ce.proportion.long = ce.proportion %>% pivot_longer(cols=c(CE,NonCE),names_to="Type",values_to="Number")
+
+pdf("visual/nolabel_cenoce.pdf", width = 7, height = 5)
+
+ggplot(ce.proportion.long, aes(x = Type, y = Number, fill = Type)) +
+  geom_col(width = 0.7) +
+  geom_text(aes(label = Number), 
+            vjust = 0.5, size = 3) +
+  facet_wrap(~video, scales = "free_y") +
+  theme_minimal(base_size = 14) +
+  labs(title = "NoLabel - CE/nonCE",
+       x = "Response type",
+       y = "Value") +
+  theme(
+    #legend.position = "none",
+    strip.text = element_text(face = "bold")
+  )
+
+dev.off()
+```
+
+
+

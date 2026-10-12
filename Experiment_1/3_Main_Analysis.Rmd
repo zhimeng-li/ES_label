@@ -1,0 +1,1081 @@
+---
+title: "3_Main_Analysis"
+author: "Zhimeng Li"
+date: "2023-11-07"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#Load packages
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+list.of.packages = c("base","spearmanCI","tidyr","tidyverse", "readr","dplyr", "ggplot2","psych", "ggpubr","stats","rstatix", "pwr","Hmisc","ggfortify","apaTables","kableExtra", "Routliers","viridis","data.table","lsr","flextable","officer","ggsignif","patchwork")
+
+new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
+if(length(new.packages) > 0) {install.packages(new.packages)}
+lapply(list.of.packages, require, character.only=T)
+```
+
+
+# load data (FULL CE)
+```{r, echo=FALSE,message=FALSE}
+all.cea=(read.csv("Processed Data/Level2_output/FULL_cea_outlierremoved.csv"))[,-1]
+names(all.cea)[1]="subjectID"
+all.acc=(read.csv("Processed Data/Level2_output/full_acc_outremoved.csv"))[,-1]
+names(all.acc)[1]="subjectID"
+
+all.optdev=(read.csv("Processed Data/Level2_output/full_optdev_outremoved.csv"))[,-1]
+
+all.mlu=(read.csv("Processed Data/Level2_output/mlu_outremoved.csv"))[,-1]
+
+all.sdt=(read.csv("Processed Data/Level2_output/FULL_sdt_agg_metrics_outlierremoved.csv"))[,-1]
+all.sdt <- all.sdt %>%
+  dplyr::select("Participant","dprime","c","condition")
+names(all.sdt)[1]="subjectID"
+#all.sdt.agg.v.all=(read.csv("Processed Data/Level2_output/within_sdt_byvideo_outremoved.csv"))[,-1]
+```
+
+```{r, echo=FALSE,message=FALSE}
+all=full_join(all.cea,all.acc,by=c("subjectID","condition"))
+all=full_join(all,all.sdt,by=c("subjectID","condition"))
+all=full_join(all,all.optdev,by=c("subjectID","condition"))
+all=full_join(all,all.mlu,by=c("subjectID","condition"))
+
+
+```
+
+# outlier summary
+```{r}
+with_NA <- all[!complete.cases(all), ] #23 participant
+num_NA <- sum(is.na(with_NA)) #29 datapoints
+
+check=with_NA %>% 
+  group_by(condition) %>%
+  dplyr::summarize(total=n())
+
+outlier_summary <- with_NA %>%
+  group_by(condition) %>%
+  dplyr::summarise(across(-c(subjectID,cr,hit), ~ sum(is.na(.x)), .names = "{.col}")) %>%
+  ungroup()
+
+```
+
+
+
+# Simple descriptive variables
+## MLU and segmentation number descriptives
+
+```{r,echo=FALSE}
+desc_SegNum <- describeBy(all.mlu$SegNum_ave, group = all.mlu$condition, mat = TRUE)
+rownames(desc_SegNum) <- desc_SegNum$group1
+desc_SegNum <- desc_SegNum[,-1]  # drop the group1 column since it's now rownames
+desc_SegNum <- data.frame(desc_SegNum)
+desc_SegNum$metric="SegNum"
+```
+
+```{r,echo=FALSE}
+desc_mlu <- describeBy(all.mlu$MLU_ave, group = all.mlu$condition, mat = TRUE)
+rownames(desc_mlu) <- desc_mlu$group1
+desc_mlu <- desc_mlu[,-1]  # drop the group1 column since it's now rownames
+desc_mlu
+desc_mlu <- data.frame(desc_mlu)
+desc_mlu$metric="MLU"
+```
+
+
+## CEA descriptives
+
+```{r,echo=FALSE}
+desc_CEA <- describeBy(all.cea$CEA_ave, group = all.cea$condition, mat = TRUE)
+rownames(desc_CEA) <- desc_CEA$group1
+desc_CEA <- desc_CEA[,-1]  # drop the group1 column since it's now rownames
+desc_CEA
+
+desc_CEA <- data.frame(desc_CEA)
+desc_CEA$metric="CEA"
+```
+
+## d' descriptives
+
+```{r,echo=FALSE}
+desc_dprime <- describeBy(all.sdt$dprime, group = all.sdt$condition, mat = TRUE)
+rownames(desc_dprime) <- desc_dprime$group1
+desc_dprime <- desc_dprime[,-1]  # drop the group1 column since it's now rownames
+desc_dprime
+
+desc_dprime <- data.frame(desc_dprime)
+desc_dprime$metric="dprime"
+
+```
+
+## c descriptives
+
+```{r,echo=FALSE}
+desc_c <- describeBy(all.sdt$c, group = all.sdt$condition, mat = TRUE)
+rownames(desc_c) <- desc_c$group1
+desc_c <- desc_c[,-1]  # drop the group1 column since it's now rownames
+desc_c
+
+desc_c <- data.frame(desc_c)
+desc_c$metric="c"
+```
+
+## accuracy descriptives
+
+```{r,echo=FALSE}
+desc_acc <- describeBy(all.acc$accuracy, group = all.acc$condition, mat = TRUE)
+rownames(desc_acc) <- desc_acc$group1
+desc_acc <- desc_acc[,-1]  # drop the group1 column since it's now rownames
+desc_acc
+
+desc_acc <- data.frame(desc_acc)
+desc_acc$metric="Accuracy"
+```
+
+##deviation descriptives
+
+```{r,echo=FALSE}
+desc_optdev <- describeBy(all.optdev$ave.c.devi, group = all.acc$condition, mat = TRUE)
+rownames(desc_optdev) <- desc_optdev$group1
+desc_optdev <- desc_optdev[,-1]  # drop the group1 column since it's now rownames
+desc_optdev
+
+desc_optdev <- data.frame(desc_optdev)
+desc_optdev$metric="optimal_c_deviation"
+```
+
+```{r}
+desc <- rbind(desc_SegNum,desc_mlu,desc_CEA,desc_dprime,desc_c,desc_acc,desc_optdev)
+desc <- rename(desc,condition=group1)
+```
+
+##descipritve - visual
+```{r}
+df_fmt <- desc %>%
+  mutate(
+    value = sprintf("%.2f (%.2f)", mean, sd)
+  ) %>%
+  select(condition, metric, value)
+```
+
+```{r}
+table_df <- df_fmt %>%
+  pivot_wider(
+    names_from = condition,
+    values_from = value
+  ) %>%
+  arrange(metric)
+```
+
+```{r}
+#apa style table
+
+ft <- flextable(table_df)
+
+ft <- set_header_labels(ft, metric = "Measure")
+
+n_total_cols <- ncol(table_df)  
+n_condition_cols <- n_total_cols - 1
+
+ft <- add_header_row(
+  ft,
+  values = c("Measure", "Condition"),
+  colwidths = c(1, n_condition_cols)
+)
+
+ft <- ft %>%
+  align(part = "all", align = "center") %>%
+  align(j = 1, part = "body", align = "left") %>%
+  fontsize(size = 11, part = "all") %>%
+  font(fontname = "Times New Roman", part = "all") %>%
+  theme_booktabs() %>%
+  autofit()
+
+ft
+```
+
+```{r}
+read_docx() %>%
+  body_add_par("Table 1", style = "heading 1") %>%
+  body_add_par("Descriptive statistics by condition", style = "Normal") %>%
+  body_add_flextable(ft) %>%
+  print(target = "visual/s1_descriptive_table.docx")
+```
+
+
+
+## CE descriptives
+
+```{r,echo=FALSE,message=FALSE}
+ce.proportion.lab=(read.csv("Processed Data/Level1_output/lab_opt_beta_bynumber.csv"))[,-1]
+ce.proportion.seg=(read.csv("Processed Data/Level1_output/seg_opt_beta_bynumber.csv"))[,-1]
+```
+
+
+```{r,echo=FALSE}
+ce.proportion.lab$condition="WithLabel"
+
+ce.proportion.seg$condition="NoLabel"
+
+
+
+full.ce=rbind(ce.proportion.lab,ce.proportion.seg)
+```
+
+```{r,echo=FALSE}
+desc_ce <- describeBy(full.ce$CE, group = full.ce$condition, mat = TRUE)
+rownames(desc_ce) <- desc_ce$group1
+desc_ce <- desc_ce[,-1]  # drop the group1 column since it's now rownames
+desc_ce
+```
+
+```{r,echo=FALSE}
+desc_ce <- describeBy(full.ce$CE_per, group = full.ce$condition, mat = TRUE)
+rownames(desc_ce) <- desc_ce$group1
+desc_ce <- desc_ce[,-1]  # drop the group1 column since it's now rownames
+desc_ce
+```
+
+
+
+#video-level
+## MLU/SegNum video level
+```{r, echo=FALSE,message=FALSE}
+mlu.lab=(read.csv("Processed Data/Level1_output/labonly_MLU_byvideo.csv"))[,-1]
+mlu.seg=(read.csv("Processed Data/Level1_output/segonly_MLU_byvideo.csv"))[,-1]
+```
+
+```{r, echo=FALSE,message=FALSE}
+mlu.lab <- mlu.lab %>%
+    mutate(
+      video = recode(
+        video,
+        '645254162' = "twinster",
+        '645248589' = "extermis_ER",
+        '645249378' = "extremis_docpatient",
+        '645253441' = "slove_dinner",
+        '645255968' = "unrest",
+        '645250080' = "Found",
+        '645251074' = "mindgap_fight",
+        '645251954' = "mindgap_grave",
+        '645247244' = "ForAkheem"
+      )
+    ) %>%
+    mutate(video = as.factor(video)) 
+
+
+mlu.seg <- mlu.seg %>%
+    mutate(
+      video = recode(
+        video,
+        '645254162' = "twinster",
+        '645248589' = "extermis_ER",
+        '645249378' = "extremis_docpatient",
+        '645253441' = "slove_dinner",
+        '645255968' = "unrest",
+        '645250080' = "Found",
+        '645251074' = "mindgap_fight",
+        '645251954' = "mindgap_grave",
+        '645247244' = "ForAkheem"
+      )
+    ) %>%
+    mutate(video = as.factor(video)) 
+
+
+
+```
+
+```{r, echo=FALSE,message=FALSE}
+mlu.lab=mlu.lab %>%
+  group_by(video) %>%
+  dplyr::summarize(SegN=mean(n),MLU_ave=mean(MLU))
+mlu.lab[,c(2:3)]=round(mlu.lab[,c(2:3)], digits = 2)
+
+
+mlu.seg=mlu.seg %>%
+  group_by(video) %>%
+  dplyr::summarize(SegN=mean(n),MLU_ave=mean(MLU))
+mlu.seg[,c(2:3)]=round(mlu.seg[,c(2:3)], digits = 2)
+
+
+
+```
+
+
+```{r, echo=FALSE,message=FALSE, warning=FALSE}
+ft <- flextable(mlu.lab)
+ft <- autofit(ft)  # adjusts column widths
+ft <- set_caption(ft, caption = "Labeling - SegN/MLU")
+ft
+
+ft <- flextable(mlu.seg)
+ft <- autofit(ft)  # adjusts column widths
+ft <- set_caption(ft, caption = "No label- SegN/MLU")
+ft
+
+```
+
+```{r,echo=FALSE,message=FALSE}
+mlu.long.lab = mlu.lab %>% pivot_longer(cols=c(SegN,MLU_ave),names_to="Metric",values_to="Average")
+mlu.long.seg = mlu.seg %>% pivot_longer(cols=c(SegN,MLU_ave),names_to="Metric",values_to="Average")
+
+```
+
+```{r,echo=FALSE,message=FALSE}
+ggplot(mlu.long.lab, aes(x = video, y = Average, fill = Metric)) +
+  geom_col(width = 0.7, position = "dodge") +
+  geom_text(aes(label = Average), 
+            vjust = -0.5, size = 3, position = position_dodge(width = 0.7)) +
+  facet_wrap(~Metric, scales = "free_y") +
+  theme_minimal(base_size = 14) +
+  labs(title = "Labeling - SegN/MLU",
+       x = "Video",
+       y = "Value") +
+  theme(
+    strip.text = element_text(face = "bold"),
+    legend.position = "none",
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+ggplot(mlu.long.seg, aes(x = video, y = Average, fill = Metric)) +
+  geom_col(width = 0.7, position = "dodge") +
+  geom_text(aes(label = Average), 
+            vjust = -0.5, size = 3, position = position_dodge(width = 0.7)) +
+  facet_wrap(~Metric, scales = "free_y") +
+  theme_minimal(base_size = 14) +
+  labs(title = "No Label - SegN/MLU",
+       x = "Video",
+       y = "Value") +
+  theme(
+    strip.text = element_text(face = "bold"),
+    legend.position = "none",
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+
+```
+
+
+## CE/non-CE proportion
+```{r,echo=FALSE,message=FALSE}
+ce.proportion.lab=(read.csv("Processed Data/Level1_output/lab_opt_beta_bynumber.csv"))[,-1]
+ce.proportion.seg=(read.csv("Processed Data/Level1_output/seg_opt_beta_bynumber.csv"))[,-1]
+```
+
+```{r,echo=FALSE,message=FALSE}
+ce.proportion.lab <- ce.proportion.lab %>%
+    mutate(
+      video = recode(
+        video,
+        '645254162' = "twinster",
+        '645248589' = "extermis_ER",
+        '645249378' = "extremis_docpatient",
+        '645253441' = "slove_dinner",
+        '645255968' = "unrest",
+        '645250080' = "Found",
+        '645251074' = "mindgap_fight",
+        '645251954' = "mindgap_grave",
+        '645247244' = "ForAkheem"
+      )
+    ) %>%
+    mutate(video = as.factor(video)) 
+
+ce.proportion.lab[,c(5:7)]=round(ce.proportion.lab[,c(5:7)], digits = 2)
+
+ce.proportion.seg <- ce.proportion.seg %>%
+    mutate(
+      video = recode(
+        video,
+        '645254162' = "twinster",
+        '645248589' = "extermis_ER",
+        '645249378' = "extremis_docpatient",
+        '645253441' = "slove_dinner",
+        '645255968' = "unrest",
+        '645250080' = "Found",
+        '645251074' = "mindgap_fight",
+        '645251954' = "mindgap_grave",
+        '645247244' = "ForAkheem"
+      )
+    ) %>%
+    mutate(video = as.factor(video)) 
+
+ce.proportion.seg[,c(5:7)]=round(ce.proportion.seg[,c(5:7)], digits = 2)
+
+
+```
+
+
+```{r,echo=FALSE,message=FALSE}
+#Tables for ce proportion
+ft <- flextable(ce.proportion.lab)
+ft <- autofit(ft)  # adjusts column widths
+ft <- width(ft, width = 1.0)           # set all columns to fixed width
+ft <- flextable::fit_to_width(ft, max_width = 8)
+ft <- set_caption(ft, caption = "Labeling - CE/non-CE proportion")
+ft
+
+ft <- flextable(ce.proportion.seg)
+ft <- autofit(ft)  # adjusts column widths
+ft <- width(ft, width = 1.0)           # set all columns to fixed width
+ft <- flextable::fit_to_width(ft, max_width = 8)
+ft <- set_caption(ft, caption = "No label- CE/non-CE proportion")
+ft
+
+
+
+```
+
+```{r,echo=FALSE,message=FALSE}
+ce.proportion.long.lab = ce.proportion.lab %>% pivot_longer(cols=c(CE,NonCE),names_to="Type",values_to="Number")
+ce.proportion.long.seg = ce.proportion.seg %>% pivot_longer(cols=c(CE,NonCE),names_to="Type",values_to="Number")
+
+```
+
+```{r,echo=FALSE,message=FALSE}
+ggplot(ce.proportion.long.lab, aes(x = Type, y = Number, fill = Type)) +
+  geom_col(width = 0.7) +
+  geom_text(aes(label = Number), 
+            vjust = 0.5, size = 3) +
+  facet_wrap(~video, scales = "free_y") +
+  theme_minimal(base_size = 14) +
+  labs(title = "Labeling - CE/nonCE",
+       x = "Response type",
+       y = "Value") +
+  theme(
+    #legend.position = "none",
+    strip.text = element_text(face = "bold")
+  )
+
+ggplot(ce.proportion.long.seg, aes(x = Type, y = Number, fill = Type)) +
+  geom_col(width = 0.7) +
+  geom_text(aes(label = Number), 
+            vjust = 0.5, size = 3) +
+  facet_wrap(~video, scales = "free_y") +
+  theme_minimal(base_size = 14) +
+  labs(title = "No label - CE/nonCE",
+       x = "Response type",
+       y = "Value") +
+  theme(
+    #legend.position = "none",
+    strip.text = element_text(face = "bold")
+  )
+
+
+```
+
+
+## Proportion of decision/response (hit, miss, fa, cr)
+```{r,echo=FALSE,message=FALSE}
+summary.wide.lab=(read.csv("Processed Data/Level1_output/lab_response_proportion.csv"))[,-1]
+summary.wide.seg=(read.csv("Processed Data/Level1_output/seg_response_proportion.csv"))[,-1]
+
+
+df.long.lab=(read.csv("Processed Data/Level1_output/lab_response_proportion_long.csv"))[,-1]
+df.long.seg=(read.csv("Processed Data/Level1_output/seg_response_proportion_long.csv"))[,-1]
+
+```
+
+```{r,echo=FALSE,message=FALSE,warning=FALSE}
+ft <- flextable(summary.wide.lab)
+ft <- autofit(ft)  # adjusts column widths
+ft <- set_caption(ft, caption = "Labeling - Response proportion")
+ft
+
+ft <- flextable(summary.wide.seg)
+ft <- autofit(ft)  # adjusts column widths
+ft <- set_caption(ft, caption = "No label - Response proportion")
+ft
+
+
+```
+
+```{r,echo=FALSE,message=FALSE}
+ggplot(df.long.lab,
+       aes(x = Veracity,                # one bar per veracity group
+           y = proportion,
+           fill = type)) +
+  geom_col(width = 0.7, position = "stack") +
+  geom_text(aes(label = round(proportion, 2)),
+            position = position_stack(vjust = 0.5), # centers text in stacks
+            size = 3) +
+  facet_wrap(~Stimuli, scales = "free_y") +
+  theme_minimal(base_size = 14) +
+  labs(title = "Labeling - Response proportion",
+       x = "Trial type (CE / nonCE)",
+       y = "Proportion") +
+  theme(
+    strip.text = element_text(face = "bold")
+  )
+
+ggplot(df.long.seg,
+       aes(x = Veracity,                # one bar per veracity group
+           y = proportion,
+           fill = type)) +
+  geom_col(width = 0.7, position = "stack") +
+  geom_text(aes(label = round(proportion, 2)),
+            position = position_stack(vjust = 0.5), # centers text in stacks
+            size = 3) +
+  facet_wrap(~Stimuli, scales = "free_y") +
+  theme_minimal(base_size = 14) +
+  labs(title = "No label - Response proportion",
+       x = "Trial type (CE / nonCE)",
+       y = "Proportion") +
+  theme(
+    strip.text = element_text(face = "bold")
+  )
+
+
+
+```
+
+#full CE
+
+##T-test
+```{r,echo=FALSE}
+
+
+#test assumptions for t-test
+with(all, shapiro.test(dprime[condition == "WithLabel"]))# p = 0.63
+with(all, shapiro.test(dprime[condition == "NoLabel"])) # p = 0.98
+#both normally distributed
+```
+
+```{r}
+res.ftest <- var.test(dprime ~ condition, data = all)
+res.ftest #p=0.02121
+#difference between variance
+```
+
+```{r}
+with(all, shapiro.test(c[condition == "WithLabel"]))# p = 0.03
+with(all, shapiro.test(c[condition == "NoLabel"])) # p = 0.09603
+#label group not normally distributed
+```
+
+```{r}
+res.ftest <- var.test(c ~ condition, data = all)
+res.ftest #p=0.49
+#no difference between variance
+
+
+```
+
+### CEA
+```{r,echo=FALSE}
+t.test(CEA_ave~condition,alternative="two.sided",data=all)
+#with label, people are less sensitive (lower dprime)
+#also note that with label, there's overall fewer number of CE than no label condition
+```
+
+### effect size
+```{r}
+cohensD(CEA_ave~condition,data=all) 
+
+```
+
+
+
+
+
+
+### dprime
+```{r,echo=FALSE}
+t.test(dprime~condition,alternative="two.sided",data=all)
+#with label, people are less sensitive (lower dprime)
+#also note that with label, there's overall fewer number of CE than no label condition
+```
+
+### effect size
+```{r}
+cohensD(dprime~condition,data=all) #effect size of 0.72 (moderate), power sufficient to be detected
+
+```
+
+
+
+### c
+```{r,echo=FALSE}
+t.test(c~condition,alternative="two.sided",data=all)
+#with label, people are also more conservative (higher c)
+```
+
+### effect size
+```{r}
+cohensD(c~condition,data=all) #effect size of 0.99
+
+```
+
+
+
+###accuracy
+```{r,echo=FALSE}
+t.test(accuracy~condition,alternative="two.sided",data=all)
+```
+
+### effect size
+```{r}
+cohensD(accuracy~condition,data=all) 
+```
+
+
+###deviation from optimal c
+main effect of condition in deviation from optimal c
+```{r,echo=FALSE}
+
+t.test(ave.c.devi~condition,alternative="two.sided",data=all)
+```
+
+### effect size
+```{r}
+cohensD(ave.c.devi~condition,data=all) 
+```
+
+### mlu
+```{r,echo=FALSE}
+t.test(MLU_ave~condition,alternative="two.sided",data=all)
+#with label, people are also more conservative (higher c)
+```
+
+### effect size
+```{r}
+cohensD(MLU_ave~condition,data=all) 
+
+```
+
+### seg num
+```{r,echo=FALSE}
+t.test(SegNum_ave~condition,alternative="two.sided",data=all)
+#with label, people are also more conservative (higher c)
+```
+
+### effect size
+```{r}
+cohensD(SegNum_ave~condition,data=all) 
+
+```
+
+##visual
+
+```{r}
+
+# all$condition <- factor(
+#   all$condition,
+#   levels = c("NoLabel", "WithLabel")
+# )
+
+
+make_boxplot <- function(
+    data,
+    variable,
+    title,
+    comparisons = NULL,
+    annotations = NULL
+) {
+  
+  p <- ggplot(
+    data,
+    aes(
+      x = condition,
+      y = .data[[variable]]
+    )
+  ) +
+    geom_boxplot(aes(fill = condition)) +
+    scale_fill_viridis(discrete = TRUE, alpha = 0.6) +
+    geom_jitter(
+      color = "black",
+      size = 0.4,
+      alpha = 0.9
+    ) +
+    scale_y_continuous(
+      expand = expansion(mult = c(0.05, 0.20))
+    ) +
+    coord_cartesian(clip = "off") +
+    theme_bw(base_size = 16) +
+    theme(
+      legend.position = "none",
+      plot.title = element_text(size = 14),
+      panel.border = element_blank(),
+      plot.margin = margin(t = 12, r = 5, b = 5, l = 5)
+    ) +
+    labs(
+      title = title,
+      x = ""
+    )
+  
+  if (!is.null(comparisons)) {
+    p <- p +
+      geom_signif(
+        comparisons = comparisons,
+        annotations = annotations,
+        map_signif_level = FALSE,
+        margin_top = 0.05,
+        tip_length = 0.01,
+        textsize = 5
+      )
+  }
+  
+  return(p)
+}
+```
+
+
+```{r}
+label_comparison <- list(
+  c("NoLabel", "WithLabel")
+)
+
+
+# 1. sensitivity, and response bias
+
+
+p_sensitivity <- make_boxplot(
+  all,
+  variable = "dprime",
+  title = "Sensitivity by condition",
+  comparisons = label_comparison,
+  annotations = "***"
+)
+
+p_criterion <- make_boxplot(
+  all,
+  variable = "c",
+  title = "Response bias by condition",
+  comparisons = label_comparison,
+  annotations = "***"
+)
+
+p_performance <-  p_sensitivity + p_criterion
+
+ggsave(
+  filename = "visual/sensitivity_bias.pdf",
+  plot = p_performance,
+  width = 10,
+  height = 5
+)
+
+
+# 2. Accuracy & Consensus Event Agreement
+
+p_accuracy <- make_boxplot(
+  all,
+  variable = "accuracy",
+  title = "Accuracy by condition",
+  comparisons = label_comparison,
+  annotations = "***"
+)
+
+
+p_CEA <- make_boxplot(
+  all,
+  variable = "CEA_ave",
+  title = "Consensus Event Agreement by condition",
+  comparisons = label_comparison,
+  annotations = "***"
+)
+
+p_accCEA <- p_accuracy + p_CEA
+
+
+ggsave(
+  filename = "visual/CEA_accuracy_boxplot.pdf",
+  plot = p_accCEA,
+  width = 10,
+  height = 5
+)
+
+
+# 3. Segmentation number and mean length unit
+p_segnum <- make_boxplot(
+  all,
+  variable = "SegNum_ave",
+  title = "Segmentation Number by condition",
+  comparisons = label_comparison,
+  annotations = "***"
+)
+
+p_MLU <- make_boxplot(
+  all,
+  variable = "MLU_ave",
+  title = "Mean length unit by condition",
+  comparisons = label_comparison,
+  annotations = "***"
+)
+
+p_segmentation <- p_segnum + p_MLU
+
+ggsave(
+  filename = "visual/segnum_MLU.pdf",
+  plot = p_segmentation,
+  width = 10,
+  height = 5
+)
+```
+
+
+
+
+
+
+
+
+
+#within CE
+```{r}
+within.sdt=(read.csv("Processed Data/Level2_output/within_sdt_agg_metrics_outlierremoved.csv"))[,-1]
+names(within.sdt)[1]="subjectID"
+within.cea=(read.csv("Processed Data/Level2_output/within_cea_outlierremoved.csv"))[,-1]
+names(within.cea)[1]="subjectID"
+
+within.mlu=(read.csv("Processed Data/Level2_output/mlu_outremoved.csv"))[,-1]
+
+within.acc=(read.csv("Processed Data/Level2_output/within_acc_outremoved.csv"))[,-1]
+names(within.acc)[1]="subjectID"
+
+within.optdev=(read.csv("Processed Data/Level2_output/within_optdev_outremoved.csv"))[,-1]
+
+all=full_join(within.sdt,within.cea)
+all=full_join(all,within.acc)
+all=full_join(all,within.optdev)
+all=full_join(all,within.mlu)
+
+
+```
+
+# outlier summary
+```{r}
+with_NA <- all[!complete.cases(all), ] #34 participant
+num_NA <- sum(is.na(with_NA)) #44 datapoints
+
+check=with_NA %>% 
+  group_by(condition) %>%
+  dplyr::summarize(total=n())
+
+outlier_summary <- with_NA %>%
+  group_by(condition) %>%
+  dplyr::summarise(across(-c(subjectID,cr,hit), ~ sum(is.na(.x)), .names = "{.col}")) %>%
+  ungroup()
+
+
+```
+
+
+# Simple descriptive variables (video-level)
+## MLU and segmentation number descriptives
+
+```{r,echo=FALSE}
+desc_SegNum <- describeBy(within.mlu$SegNum_ave, group = within.mlu$condition, mat = TRUE)
+rownames(desc_SegNum) <- desc_SegNum$group1
+desc_SegNum <- desc_SegNum[,-1]  # drop the group1 column since it's now rownames
+desc_SegNum <- data.frame(desc_SegNum)
+desc_SegNum$metric="SegNum"
+```
+
+```{r,echo=FALSE}
+desc_mlu <- describeBy(within.mlu$MLU_ave, group = within.mlu$condition, mat = TRUE)
+rownames(desc_mlu) <- desc_mlu$group1
+desc_mlu <- desc_mlu[,-1]  # drop the group1 column since it's now rownames
+desc_mlu
+desc_mlu <- data.frame(desc_mlu)
+desc_mlu$metric="MLU"
+```
+
+
+## CEA descriptives
+
+```{r,echo=FALSE}
+desc_CEA <- describeBy(within.cea$CEA_ave, group = within.cea$condition, mat = TRUE)
+rownames(desc_CEA) <- desc_CEA$group1
+desc_CEA <- desc_CEA[,-1]  # drop the group1 column since it's now rownames
+desc_CEA
+
+desc_CEA <- data.frame(desc_CEA)
+desc_CEA$metric="CEA"
+```
+
+## d' descriptives
+
+```{r,echo=FALSE}
+desc_dprime <- describeBy(within.sdt$dprime, group = within.sdt$condition, mat = TRUE)
+rownames(desc_dprime) <- desc_dprime$group1
+desc_dprime <- desc_dprime[,-1]  # drop the group1 column since it's now rownames
+desc_dprime
+
+desc_dprime <- data.frame(desc_dprime)
+desc_dprime$metric="dprime"
+
+```
+
+## c descriptives
+
+```{r,echo=FALSE}
+desc_c <- describeBy(within.sdt$c, group = within.sdt$condition, mat = TRUE)
+rownames(desc_c) <- desc_c$group1
+desc_c <- desc_c[,-1]  # drop the group1 column since it's now rownames
+desc_c
+
+desc_c <- data.frame(desc_c)
+desc_c$metric="c"
+```
+
+## accuracy descriptives
+
+```{r,echo=FALSE}
+desc_acc <- describeBy(within.acc$accuracy, group = within.acc$condition, mat = TRUE)
+rownames(desc_acc) <- desc_acc$group1
+desc_acc <- desc_acc[,-1]  # drop the group1 column since it's now rownames
+desc_acc
+
+desc_acc <- data.frame(desc_acc)
+desc_acc$metric="Accuracy"
+```
+
+##deviation descriptives
+
+```{r,echo=FALSE}
+desc_optdev <- describeBy(within.optdev$ave.c.devi, group = within.acc$condition, mat = TRUE)
+rownames(desc_optdev) <- desc_optdev$group1
+desc_optdev <- desc_optdev[,-1]  # drop the group1 column since it's now rownames
+desc_optdev
+
+desc_optdev <- data.frame(desc_optdev)
+desc_optdev$metric="optimal_c_deviation"
+```
+
+```{r}
+desc <- rbind(desc_SegNum,desc_mlu,desc_CEA,desc_dprime,desc_c,desc_acc,desc_optdev)
+desc <- rename(desc,condition=group1)
+```
+
+##descipritve - visual
+```{r}
+df_fmt <- desc %>%
+  mutate(
+    value = sprintf("%.2f (%.2f)", mean, sd)
+  ) %>%
+  select(condition, metric, value)
+```
+
+```{r}
+table_df <- df_fmt %>%
+  pivot_wider(
+    names_from = condition,
+    values_from = value
+  ) %>%
+  arrange(metric)
+```
+
+```{r}
+#apa style table
+
+ft <- flextable(table_df)
+
+ft <- set_header_labels(ft, metric = "Measure")
+
+n_total_cols <- ncol(table_df)  
+n_condition_cols <- n_total_cols - 1
+
+ft <- add_header_row(
+  ft,
+  values = c("Measure", "Condition"),
+  colwidths = c(1, n_condition_cols)
+)
+
+ft <- ft %>%
+  align(part = "all", align = "center") %>%
+  align(j = 1, part = "body", align = "left") %>%
+  fontsize(size = 11, part = "all") %>%
+  font(fontname = "Times New Roman", part = "all") %>%
+  theme_booktabs() %>%
+  autofit()
+
+ft
+```
+##Ttest
+```{r,echo=FALSE}
+
+#test assumptions for t-test
+with(all, shapiro.test(dprime[condition == "WithLabel"]))
+with(all, shapiro.test(dprime[condition == "NoLabel"])) 
+#both normally distributed
+```
+
+```{r,echo=FALSE}
+res.ftest <- var.test(dprime ~ condition, data = all)
+res.ftest #p=0.02
+#difference between variance
+
+with(all, shapiro.test(c[condition == "WithLabel"]))#
+with(all, shapiro.test(c[condition == "NoLabel"]))
+#label condition not normally distributed
+res.ftest <- var.test(c ~ condition, data = all)
+res.ftest #p=0.90
+#no difference between variance
+
+#we do u test for c given it's not normally distributed
+
+wilcox.test(c~ condition, data = all, exact = FALSE)
+#two conditions still significantly different
+```
+
+
+### CEA
+```{r,echo=FALSE}
+
+t.test(CEA_ave~condition,alternative="two.sided",data=all)
+```
+
+### effect size
+```{r}
+cohensD(CEA_ave~condition,data=all) 
+```
+
+
+### dprime
+```{r,echo=FALSE}
+
+t.test(dprime~condition,alternative="two.sided",data=all)
+#with label, people are less sensitive (lower dprime)
+```
+### effect size
+```{r}
+cohensD(dprime~condition,data=all) 
+```
+### c
+```{r,echo=FALSE}
+t.test(c~condition,alternative="two.sided",data=all)
+#with label, people are also more conservative (higher c)
+```
+### effect size
+
+```{r}
+cohensD(c~condition,data=all) 
+```
+
+### accuracy
+```{r,echo=FALSE}
+t.test(accuracy~condition,alternative="two.sided",data=all)
+#with label, people are also more conservative (higher c)
+```
+### effect size
+
+```{r}
+cohensD(accuracy~condition,data=all) 
+```
+
+### deviation from c
+```{r,echo=FALSE}
+t.test(ave.c.devi~condition,alternative="two.sided",data=all)
+#with label, people are also more conservative (higher c)
+```
+### effect size
+
+```{r}
+cohensD(ave.c.devi~condition,data=all) 
+```
+
+
+
